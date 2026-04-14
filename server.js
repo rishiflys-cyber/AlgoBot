@@ -17,7 +17,10 @@ const SAFE_MODE = false;
 const MAX_TRADES = 2;
 const RISK_PER_TRADE = 0.02;
 
-// ===== STOCK LIST =====
+// ===== KILL SWITCH =====
+let KILL_SWITCH = false;
+
+// ===== STOCKS =====
 const stocks = [
   { symbol: "RELIANCE", token: 738561 },
   { symbol: "TCS", token: 2953217 },
@@ -35,10 +38,16 @@ app.get("/redirect", async (req, res) => {
 
     await updateCapital();
 
-    res.send("Login Success ✅ LIVE MODE ACTIVE");
+    res.send("Login Success ✅ PRO MODE ACTIVE");
   } catch (e) {
     res.send("Login Failed ❌");
   }
+});
+
+// ===== KILL SWITCH API =====
+app.get("/kill", (req, res) => {
+  KILL_SWITCH = true;
+  res.send("🚨 BOT STOPPED");
 });
 
 // ===== CAPITAL =====
@@ -67,6 +76,7 @@ function ema(prices, p) {
 // ===== STRATEGY =====
 async function run() {
   if (!access_token) return;
+  if (KILL_SWITCH) return;
   if (openTrades >= MAX_TRADES) return;
 
   for (let s of stocks) {
@@ -92,7 +102,8 @@ async function run() {
 
       if (!signal) continue;
 
-      let qty = Math.floor((capital * RISK_PER_TRADE) / prices.at(-1));
+      let price = prices.at(-1);
+      let qty = Math.floor((capital * RISK_PER_TRADE) / price);
       if (qty <= 0) continue;
 
       console.log("TRADE:", s.symbol, signal, qty);
@@ -108,8 +119,22 @@ async function run() {
         });
       }
 
+      // ===== STOP LOSS & TARGET =====
+      let sl = price * 0.99;
+      let target = price * 1.02;
+
+      trades.push({
+        symbol: s.symbol,
+        signal,
+        qty,
+        entry: price,
+        sl,
+        target,
+        pnl: 0,
+        time: new Date()
+      });
+
       openTrades++;
-      trades.push({ symbol: s.symbol, signal, qty, pnl: 0, time: new Date() });
 
     } catch (e) {
       console.log("Err:", e.message);
@@ -117,7 +142,45 @@ async function run() {
   }
 }
 
+// ===== EXIT LOGIC =====
+async function monitorPositions() {
+  try {
+    const positions = await kite.getPositions();
+
+    positions.net.forEach(p => {
+      if (p.quantity === 0) return;
+
+      let trade = trades.find(t => t.symbol === p.tradingsymbol);
+      if (!trade) return;
+
+      let ltp = p.last_price;
+
+      if (ltp <= trade.sl || ltp >= trade.target) {
+        let exitType = p.quantity > 0 ? "SELL" : "BUY";
+
+        kite.placeOrder("regular", {
+          exchange: "NSE",
+          tradingsymbol: p.tradingsymbol,
+          transaction_type: exitType,
+          quantity: Math.abs(p.quantity),
+          order_type: "MARKET",
+          product: "MIS"
+        });
+
+        trade.pnl = (ltp - trade.entry) * trade.qty;
+        openTrades--;
+
+        console.log("EXIT:", p.tradingsymbol, trade.pnl);
+      }
+    });
+
+  } catch (e) {
+    console.log("Monitor error:", e.message);
+  }
+}
+
 setInterval(run, 60000);
+setInterval(monitorPositions, 30000);
 setInterval(updateCapital, 300000);
 
-app.listen(PORT, () => console.log("LIVE BOT RUNNING CLEAN"));
+app.listen(PORT, () => console.log("PRO BOT RUNNING 🚀"));
