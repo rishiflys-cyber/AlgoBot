@@ -3,54 +3,49 @@ const express = require("express");
 const { KiteConnect } = require("kiteconnect");
 
 const app = express();
-
 const PORT = process.env.PORT || 8080;
 
-const API_KEY = process.env.KITE_API_KEY;
-const API_SECRET = process.env.KITE_API_SECRET;
+const kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
+
+let access_token = null;
+let capital = 0;
+let trades = [];
+let openTrades = 0;
 
 // ===== CONFIG =====
 const SAFE_MODE = false;
+const MAX_TRADES = 2;
 const RISK_PER_TRADE = 0.02;
-const MAX_DAILY_LOSS = 0.05;
 
-let capital = 0;
-let dailyLoss = 0;
-let trades = [];
+// ===== STOCK LIST =====
+const stocks = [
+  { symbol: "RELIANCE", token: 738561 },
+  { symbol: "TCS", token: 2953217 },
+  { symbol: "INFY", token: 408065 }
+];
 
-let kite = new KiteConnect({ api_key: API_KEY });
-let access_token = null;
-
-// ===== FETCH REAL CAPITAL =====
-async function updateCapital() {
-  try {
-    const margins = await kite.getMargins();
-    capital = margins.equity.available.live_balance;
-    console.log("Updated Capital:", capital);
-  } catch (err) {
-    console.log("Capital fetch error:", err.message);
-  }
-}
-
-// ===== ROUTES =====
-app.get("/", (req, res) => res.send("AlgoBot FINAL REAL MODE 🚀"));
-
+// ===== LOGIN =====
 app.get("/login", (req, res) => res.redirect(kite.getLoginURL()));
 
 app.get("/redirect", async (req, res) => {
   try {
-    const request_token = req.query.request_token;
-    const session = await kite.generateSession(request_token, API_SECRET);
+    const session = await kite.generateSession(req.query.request_token, process.env.KITE_API_SECRET);
     access_token = session.access_token;
     kite.setAccessToken(access_token);
 
     await updateCapital();
 
-    res.send("Login Success ✅ REAL CAPITAL ACTIVE");
-  } catch (err) {
+    res.send("Login Success ✅ LIVE MODE ACTIVE");
+  } catch (e) {
     res.send("Login Failed ❌");
   }
 });
+
+// ===== CAPITAL =====
+async function updateCapital() {
+  const m = await kite.getMargins();
+  capital = m.equity.available.live_balance;
+}
 
 // ===== DASHBOARD =====
 app.get("/dashboard", (req, res) => {
@@ -58,93 +53,71 @@ app.get("/dashboard", (req, res) => {
   let total = trades.length;
   let winRate = total ? ((wins / total) * 100).toFixed(2) : 0;
 
-  res.json({
-    capital,
-    trades: trades.slice(-10),
-    winRate: winRate + "%"
-  });
+  res.json({ capital, trades: trades.slice(-10), winRate: winRate + "%" });
 });
 
 // ===== EMA =====
-function calculateEMA(prices, period) {
-  let k = 2 / (period + 1);
-  let ema = prices[0];
-  for (let i = 1; i < prices.length; i++) {
-    ema = prices[i] * k + ema * (1 - k);
-  }
-  return ema;
+function ema(prices, p) {
+  let k = 2 / (p + 1);
+  let e = prices[0];
+  for (let i = 1; i < prices.length; i++) e = prices[i]*k + e*(1-k);
+  return e;
 }
 
 // ===== STRATEGY =====
-async function runStrategy() {
+async function run() {
   if (!access_token) return;
+  if (openTrades >= MAX_TRADES) return;
 
-  if (dailyLoss >= capital * MAX_DAILY_LOSS) {
-    console.log("Max loss reached. Stopping trades.");
-    return;
-  }
+  for (let s of stocks) {
+    try {
+      const to = new Date();
+      const from = new Date();
+      from.setMinutes(from.getMinutes() - 200);
 
-  try {
-    const instrument_token = 738561; // RELIANCE
+      const candles = await kite.getHistoricalData(s.token, from, to, "5minute");
+      if (candles.length < 30) continue;
 
-    const to = new Date();
-    const from = new Date();
-    from.setMinutes(from.getMinutes() - 100);
+      const prices = candles.map(c => c.close);
+      const high = Math.max(...prices.slice(-10));
+      const low = Math.min(...prices.slice(-10));
 
-    const candles = await kite.getHistoricalData(
-      instrument_token,
-      from,
-      to,
-      "5minute"
-    );
+      const ema9 = ema(prices.slice(-20), 9);
+      const ema21 = ema(prices.slice(-20), 21);
 
-    const prices = candles.map(c => c.close);
+      let signal = null;
 
-    if (prices.length < 21) return;
+      if (ema9 > ema21 && prices.at(-1) > high) signal = "BUY";
+      if (ema9 < ema21 && prices.at(-1) < low) signal = "SELL";
 
-    const ema9 = calculateEMA(prices.slice(-20), 9);
-    const ema21 = calculateEMA(prices.slice(-20), 21);
+      if (!signal) continue;
 
-    let signal = null;
+      let qty = Math.floor((capital * RISK_PER_TRADE) / prices.at(-1));
+      if (qty <= 0) continue;
 
-    if (ema9 > ema21) signal = "BUY";
-    else if (ema9 < ema21) signal = "SELL";
+      console.log("TRADE:", s.symbol, signal, qty);
 
-    if (!signal) return;
+      if (!SAFE_MODE) {
+        await kite.placeOrder("regular", {
+          exchange: "NSE",
+          tradingsymbol: s.symbol,
+          transaction_type: signal,
+          quantity: qty,
+          order_type: "MARKET",
+          product: "MIS"
+        });
+      }
 
-    let qty = Math.floor((capital * RISK_PER_TRADE) / prices[prices.length - 1]);
+      openTrades++;
+      trades.push({ symbol: s.symbol, signal, qty, pnl: 0, time: new Date() });
 
-    if (qty <= 0) return;
-
-    console.log("Signal:", signal, "Qty:", qty);
-
-    if (!SAFE_MODE) {
-      await kite.placeOrder("regular", {
-        exchange: "NSE",
-        tradingsymbol: "RELIANCE",
-        transaction_type: signal,
-        quantity: qty,
-        order_type: "MARKET",
-        product: "MIS"
-      });
+    } catch (e) {
+      console.log("Err:", e.message);
     }
-
-    let pnl = (Math.random() * 1.2 - 0.4) * 2000;
-    capital += pnl;
-
-    if (pnl < 0) dailyLoss += Math.abs(pnl);
-
-    trades.push({ signal, qty, pnl, time: new Date() });
-
-  } catch (err) {
-    console.log("Strategy error:", err.message);
   }
 }
 
-// Run every 1 min
-setInterval(runStrategy, 60000);
-
-// Refresh capital every 5 min
+setInterval(run, 60000);
 setInterval(updateCapital, 300000);
 
-app.listen(PORT, () => console.log("FINAL REAL BOT RUNNING"));
+app.listen(PORT, () => console.log("LIVE BOT RUNNING CLEAN"));
