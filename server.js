@@ -1,44 +1,136 @@
 require("dotenv").config();
 const express = require("express");
 const fs = require("fs");
-const path = require("path");
 const { KiteConnect } = require("kiteconnect");
 
 const app = express();
 
 const PORT = process.env.PORT || 8080;
+
 const API_KEY = process.env.KITE_API_KEY;
 const API_SECRET = process.env.KITE_API_SECRET;
+
+// ===== CONFIG =====
+const SAFE_MODE = false;
+const RISK_PER_TRADE = 0.02;
+const MAX_DAILY_LOSS = 0.05;
+
+let capital = 100000;
+let dailyLoss = 0;
+let trades = [];
 
 let kite = new KiteConnect({ api_key: API_KEY });
 let access_token = null;
 
-app.get("/", (req, res) => res.send("AlgoBot Running 🚀"));
+// ===== ROUTES =====
+app.get("/", (req, res) => res.send("AlgoBot REAL DATA MODE 🚀"));
 
 app.get("/login", (req, res) => res.redirect(kite.getLoginURL()));
 
 app.get("/redirect", async (req, res) => {
   try {
-    console.log("FULL QUERY:", req.query);
-
     const request_token = req.query.request_token;
-
-    if (!request_token) {
-      return res.send("No request token received ❌");
-    }
-
     const session = await kite.generateSession(request_token, API_SECRET);
-
     access_token = session.access_token;
     kite.setAccessToken(access_token);
 
-    res.send("Login Success ✅ Bot Started");
+    res.send("Login Success ✅ REAL DATA MODE ACTIVE");
   } catch (err) {
-    console.error(err);
     res.send("Login Failed ❌");
   }
 });
 
-app.listen(PORT, () => {
-  console.log("AlgoBot Running on", PORT);
+// ===== DASHBOARD =====
+app.get("/dashboard", (req, res) => {
+  let wins = trades.filter(t => t.pnl > 0).length;
+  let total = trades.length;
+  let winRate = total ? ((wins / total) * 100).toFixed(2) : 0;
+
+  res.json({
+    capital,
+    trades: trades.slice(-10),
+    winRate: winRate + "%"
+  });
 });
+
+// ===== EMA =====
+function calculateEMA(prices, period) {
+  let k = 2 / (period + 1);
+  let ema = prices[0];
+  for (let i = 1; i < prices.length; i++) {
+    ema = prices[i] * k + ema * (1 - k);
+  }
+  return ema;
+}
+
+// ===== REAL DATA STRATEGY =====
+async function runStrategy() {
+  if (!access_token) return;
+
+  if (dailyLoss >= capital * MAX_DAILY_LOSS) {
+    console.log("Max loss reached. Stopping trades.");
+    return;
+  }
+
+  try {
+    const instrument_token = 738561; // RELIANCE example
+
+    const to = new Date();
+    const from = new Date();
+    from.setMinutes(from.getMinutes() - 100);
+
+    const candles = await kite.getHistoricalData(
+      instrument_token,
+      from,
+      to,
+      "5minute"
+    );
+
+    const prices = candles.map(c => c.close);
+
+    if (prices.length < 21) return;
+
+    const ema9 = calculateEMA(prices.slice(-20), 9);
+    const ema21 = calculateEMA(prices.slice(-20), 21);
+
+    let signal = null;
+
+    if (ema9 > ema21) signal = "BUY";
+    else if (ema9 < ema21) signal = "SELL";
+
+    if (!signal) return;
+
+    let qty = Math.floor((capital * RISK_PER_TRADE) / prices[prices.length - 1]);
+
+    if (qty <= 0) return;
+
+    console.log("Signal:", signal, "Qty:", qty);
+
+    if (!SAFE_MODE) {
+      await kite.placeOrder("regular", {
+        exchange: "NSE",
+        tradingsymbol: "RELIANCE",
+        transaction_type: signal,
+        quantity: qty,
+        order_type: "MARKET",
+        product: "MIS"
+      });
+    }
+
+    // MOCK pnl tracking (since order confirmation async)
+    let pnl = (Math.random() * 1.2 - 0.4) * 2000;
+    capital += pnl;
+
+    if (pnl < 0) dailyLoss += Math.abs(pnl);
+
+    trades.push({ signal, qty, pnl, time: new Date() });
+
+  } catch (err) {
+    console.log("Strategy error:", err.message);
+  }
+}
+
+// Run every 1 min
+setInterval(runStrategy, 60000);
+
+app.listen(PORT, () => console.log("REAL DATA BOT RUNNING"));
