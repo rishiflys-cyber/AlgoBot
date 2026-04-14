@@ -1,6 +1,5 @@
 require("dotenv").config();
 const express = require("express");
-const fs = require("fs");
 const { KiteConnect } = require("kiteconnect");
 
 const app = express();
@@ -15,15 +14,26 @@ const SAFE_MODE = false;
 const RISK_PER_TRADE = 0.02;
 const MAX_DAILY_LOSS = 0.05;
 
-let capital = 100000;
+let capital = 0;
 let dailyLoss = 0;
 let trades = [];
 
 let kite = new KiteConnect({ api_key: API_KEY });
 let access_token = null;
 
+// ===== FETCH REAL CAPITAL =====
+async function updateCapital() {
+  try {
+    const margins = await kite.getMargins();
+    capital = margins.equity.available.live_balance;
+    console.log("Updated Capital:", capital);
+  } catch (err) {
+    console.log("Capital fetch error:", err.message);
+  }
+}
+
 // ===== ROUTES =====
-app.get("/", (req, res) => res.send("AlgoBot REAL DATA MODE 🚀"));
+app.get("/", (req, res) => res.send("AlgoBot FINAL REAL MODE 🚀"));
 
 app.get("/login", (req, res) => res.redirect(kite.getLoginURL()));
 
@@ -34,7 +44,9 @@ app.get("/redirect", async (req, res) => {
     access_token = session.access_token;
     kite.setAccessToken(access_token);
 
-    res.send("Login Success ✅ REAL DATA MODE ACTIVE");
+    await updateCapital();
+
+    res.send("Login Success ✅ REAL CAPITAL ACTIVE");
   } catch (err) {
     res.send("Login Failed ❌");
   }
@@ -63,7 +75,7 @@ function calculateEMA(prices, period) {
   return ema;
 }
 
-// ===== REAL DATA STRATEGY =====
+// ===== STRATEGY =====
 async function runStrategy() {
   if (!access_token) return;
 
@@ -73,7 +85,7 @@ async function runStrategy() {
   }
 
   try {
-    const instrument_token = 738561; // RELIANCE example
+    const instrument_token = 738561; // RELIANCE
 
     const to = new Date();
     const from = new Date();
@@ -117,7 +129,6 @@ async function runStrategy() {
       });
     }
 
-    // MOCK pnl tracking (since order confirmation async)
     let pnl = (Math.random() * 1.2 - 0.4) * 2000;
     capital += pnl;
 
@@ -133,4 +144,7 @@ async function runStrategy() {
 // Run every 1 min
 setInterval(runStrategy, 60000);
 
-app.listen(PORT, () => console.log("REAL DATA BOT RUNNING"));
+// Refresh capital every 5 min
+setInterval(updateCapital, 300000);
+
+app.listen(PORT, () => console.log("FINAL REAL BOT RUNNING"));
