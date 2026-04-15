@@ -1,5 +1,5 @@
 {
-  "name": "algobot-real",
+  "name": "algobot-real-fixed",
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {

@@ -1,25 +1,35 @@
 
 <!DOCTYPE html>
 <html>
+<head>
+  <meta charset="utf-8"/>
+  <title>Real Mode Dashboard</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    button { margin-right: 10px; padding: 10px 14px; }
+    pre { background:#111; color:#0f0; padding:10px; }
+  </style>
+</head>
 <body>
-<h1>💰 REAL MODE DASHBOARD</h1>
+  <h1>💰 REAL MODE DASHBOARD</h1>
 
-<button onclick="fetch('/start')">Start</button>
-<button onclick="fetch('/kill')">Stop</button>
-<button onclick="fetch('/login')">Login</button>
+  <button onclick="fetch('/start')">Start</button>
+  <button onclick="fetch('/kill')">Stop</button>
+  <button onclick="window.location.href='/login'">Login Zerodha</button>
 
-<pre id="data"></pre>
+  <h3>Live Data</h3>
+  <pre id="data"></pre>
 
-<script>
-async function load(){
-  try{
-    const res = await fetch('/dashboard');
-    const data = await res.json();
-    document.getElementById('data').innerText = JSON.stringify(data,null,2);
-  }catch(e){}
-}
-setInterval(load,3000);
-load();
-</script>
+  <script>
+    async function load(){
+      try{
+        const res = await fetch('/dashboard');
+        const data = await res.json();
+        document.getElementById('data').innerText = JSON.stringify(data,null,2);
+      }catch(e){}
+    }
+    setInterval(load,3000);
+    load();
+  </script>
 </body>
 </html>
