@@ -6,7 +6,7 @@ const { KiteConnect } = require("kiteconnect");
 const app = express();
 app.use(express.json());
 
-// ===== STATIC UI =====
+// ===== UI =====
 app.use(express.static(path.join(__dirname, "public")));
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public/index.html"));
@@ -17,7 +17,6 @@ const kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
 
 let access_token = null;
 let capital = 0;
-let trades = [];
 let BOT_ACTIVE = true;
 
 // ===== LOGIN =====
@@ -29,7 +28,7 @@ app.get("/redirect", async (req, res) => {
     access_token = session.access_token;
     kite.setAccessToken(access_token);
     await updateCapital();
-    res.send("Login Success ✅ Dashboard Active");
+    res.send("Login Success ✅ Bot Ready");
   } catch (e) {
     res.send("Login Failed ❌");
   }
@@ -43,62 +42,26 @@ async function updateCapital() {
   } catch (e) {}
 }
 
+// ===== START / STOP =====
+app.get("/start", (req, res) => {
+  BOT_ACTIVE = true;
+  res.send("🚀 BOT STARTED");
+});
+
+app.get("/kill", (req, res) => {
+  BOT_ACTIVE = false;
+  res.send("🛑 BOT STOPPED");
+});
+
 // ===== STATUS =====
 app.get("/status", async (req, res) => {
-  try {
-    const pos = await kite.getPositions();
-    let pnl = pos.net.reduce((sum, p) => sum + p.pnl, 0);
-
-    res.json({
-      pnl,
-      trades: trades.length,
-      position: pos.net.length ? "ACTIVE" : "NONE",
-      entry: null,
-      lastLog: "Live trading running"
-    });
-  } catch {
-    res.json({ pnl: 0, trades: 0, position: "ERROR" });
-  }
-});
-
-// ===== ANALYTICS =====
-app.get("/analytics", (req, res) => {
-  let wins = trades.filter(t => t.pnl > 0).length;
-  let losses = trades.length - wins;
-
   res.json({
-    winRate: trades.length ? ((wins / trades.length) * 100).toFixed(2) : 0,
-    wins,
-    losses,
-    avgWin: 0,
-    avgLoss: 0,
-    maxDrawdown: 0,
-    consecutiveWins: wins,
-    recentTrades: trades.slice(-5)
+    capital,
+    bot: BOT_ACTIVE ? "RUNNING" : "STOPPED"
   });
 });
 
-// ===== ACCOUNT =====
-app.get("/account", (req, res) => {
-  res.json({
-    available: capital,
-    used: 0,
-    net: capital
-  });
-});
-
-// ===== CONTROL =====
-app.post("/start", (req, res) => {
-  BOT_ACTIVE = true;
-  res.send("Started");
-});
-
-app.post("/stop", (req, res) => {
-  BOT_ACTIVE = false;
-  res.send("Stopped");
-});
-
-// ===== SIMPLE STRATEGY =====
+// ===== STRATEGY =====
 async function run() {
   if (!access_token || !BOT_ACTIVE) return;
 
@@ -124,8 +87,6 @@ async function run() {
       product: "MIS"
     });
 
-    trades.push({ symbol: "RELIANCE", pnl: 0 });
-
   } catch (e) {}
 }
 
@@ -133,4 +94,4 @@ setInterval(run, 60000);
 setInterval(updateCapital, 300000);
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log("🚀 UI FIX BOT RUNNING"));
+app.listen(PORT, () => console.log("🚀 BOT WITH START/KILL RUNNING"));

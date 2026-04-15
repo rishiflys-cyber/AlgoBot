@@ -1,5 +1,5 @@
 {
-  "name": "algobot-ui-fix",
+  "name": "algobot-start-kill",
   "version": "1.0.0",
   "main": "server.js",
   "scripts": { "start": "node server.js" },
