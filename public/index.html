@@ -1,22 +1,25 @@
 
 <!DOCTYPE html>
 <html>
-<head><title>AlgoBot Dashboard</title></head>
 <body>
-<h1>🚀 Aggressive AlgoBot</h1>
+<h1>💰 REAL MODE DASHBOARD</h1>
+
 <button onclick="fetch('/start')">Start</button>
 <button onclick="fetch('/kill')">Stop</button>
+<button onclick="fetch('/login')">Login</button>
 
-<h2>Dashboard</h2>
 <pre id="data"></pre>
 
 <script>
 async function load(){
+  try{
     const res = await fetch('/dashboard');
     const data = await res.json();
     document.getElementById('data').innerText = JSON.stringify(data,null,2);
+  }catch(e){}
 }
-setInterval(load,2000);
+setInterval(load,3000);
+load();
 </script>
 </body>
 </html>
