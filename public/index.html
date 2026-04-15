@@ -1,9 +1,22 @@
+
 <!DOCTYPE html>
 <html>
-<head><title>AlgoBot</title></head>
+<head><title>AlgoBot Dashboard</title></head>
 <body>
-<h1>✅ AlgoBot Running</h1>
-<a href="/start">Start</a><br>
-<a href="/kill">Stop</a>
+<h1>🚀 Aggressive AlgoBot</h1>
+<button onclick="fetch('/start')">Start</button>
+<button onclick="fetch('/kill')">Stop</button>
+
+<h2>Dashboard</h2>
+<pre id="data"></pre>
+
+<script>
+async function load(){
+    const res = await fetch('/dashboard');
+    const data = await res.json();
+    document.getElementById('data').innerText = JSON.stringify(data,null,2);
+}
+setInterval(load,2000);
+</script>
 </body>
 </html>

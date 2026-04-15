@@ -1,41 +1,51 @@
+
 require("dotenv").config();
 const express = require("express");
 const path = require("path");
-const { KiteConnect } = require("kiteconnect");
 
 const app = express();
 app.use(express.json());
-
 app.use(express.static(path.join(__dirname, "public")));
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "public/index.html"));
-});
 
-const kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
-
+let capital = 5000;
+let trades = [];
+let wins = 0;
+let losses = 0;
 let BOT_ACTIVE = true;
 
-app.get("/login", (req, res) => res.redirect(kite.getLoginURL()));
+// UI
+app.get("/", (req,res)=>res.sendFile(path.join(__dirname,"public/index.html")));
 
-app.get("/redirect", async (req, res) => {
-  try {
-    const session = await kite.generateSession(req.query.request_token, process.env.KITE_API_SECRET);
-    kite.setAccessToken(session.access_token);
-    res.send("Login Success ✅");
-  } catch {
-    res.send("Login Failed ❌");
-  }
+// Dashboard
+app.get("/dashboard",(req,res)=>{
+    const winRate = trades.length ? ((wins/trades.length)*100).toFixed(1) : 0;
+    res.json({capital,trades,winRate});
 });
 
-app.get("/start", (req, res) => {
-  BOT_ACTIVE = true;
-  res.send("🚀 BOT STARTED");
-});
+// Start / Kill
+app.get("/start",(req,res)=>{BOT_ACTIVE=true; res.send("BOT STARTED");});
+app.get("/kill",(req,res)=>{BOT_ACTIVE=false; res.send("BOT STOPPED");});
 
-app.get("/kill", (req, res) => {
-  BOT_ACTIVE = false;
-  res.send("🛑 BOT STOPPED");
-});
+// Aggressive Trade Simulator
+setInterval(()=>{
+    if(!BOT_ACTIVE) return;
+
+    let tradeAmount = capital * 0.2;
+    let win = Math.random() > 0.4; // aggressive
+
+    if(win){
+        let profit = tradeAmount * 0.05;
+        capital += profit;
+        wins++;
+        trades.push({result:"WIN",amount:profit});
+    } else {
+        let loss = tradeAmount * 0.05;
+        capital -= loss;
+        losses++;
+        trades.push({result:"LOSS",amount:loss});
+    }
+
+},5000);
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log("Server running"));
+app.listen(PORT,()=>console.log("Aggressive Bot Running"));
