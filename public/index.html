@@ -1,1 +1,15 @@
-<h1>REAL BOT RUNNING</h1><button onclick="fetch('/start')">Start</button><button onclick="fetch('/kill')">Stop</button>
+
+<h1>REAL BOT DASHBOARD</h1>
+<button onclick="fetch('/start')">Start</button>
+<button onclick="fetch('/kill')">Stop</button>
+<button onclick="location.href='/login'">Login</button>
+<pre id="data"></pre>
+<script>
+async function load(){
+  const res = await fetch('/dashboard');
+  const data = await res.json();
+  document.getElementById('data').innerText = JSON.stringify(data,null,2);
+}
+setInterval(load,3000);
+load();
+</script>
