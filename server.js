@@ -1,4 +1,11 @@
 
+/**
+ * PATCH UPDATE - drop-in server.js
+ * Adds:
+ * - Multi-stock: RELIANCE, TCS, INFY
+ * - AI score filter (>=60)
+ * - Console marker for verification
+ */
 require("dotenv").config();
 const express = require("express");
 const path = require("path");
@@ -14,13 +21,15 @@ let access_token = null;
 let BOT_ACTIVE = false;
 let position = null;
 
+console.log("🚀 ULTIMATE AI VERSION ACTIVE (PATCH)");
+
 const STOCKS = ["RELIANCE","TCS","INFY"];
 const EXCHANGE = "NSE";
 const PRODUCT = "MIS";
 
-const MAX_TRADE_VALUE = 500;
-const SL = 0.02;
-const TP = 0.03;
+const MAX_TRADE_VALUE = Number(process.env.MAX_TRADE_VALUE || 500);
+const SL = Number(process.env.STOP_LOSS_PCT || 0.02);
+const TP = Number(process.env.TARGET_PCT || 0.03);
 
 // LOGIN
 app.get("/login", (req,res)=> res.redirect(kite.getLoginURL()));
@@ -30,9 +39,9 @@ app.get("/redirect", async (req,res)=>{
     const session = await kite.generateSession(req.query.request_token, process.env.KITE_API_SECRET);
     access_token = session.access_token;
     kite.setAccessToken(access_token);
-    res.send("Login Success ✅ ULTIMATE AI");
-  } catch {
-    res.send("Login Failed ❌");
+    res.send("Login Success ✅ ULTIMATE AI (PATCH)");
+  } catch (e) {
+    res.status(500).send("Login Failed ❌");
   }
 });
 
@@ -79,43 +88,44 @@ function aiScore(prices, candles){
   return score;
 }
 
-// AUTO START
+// AUTO START @ 9:20
 setInterval(()=>{
-  const now=new Date();
+  const now = new Date();
   if(now.getHours()===9 && now.getMinutes()===20){
-    BOT_ACTIVE=true;
+    BOT_ACTIVE = true;
+    console.log("AUTO START 9:20");
   }
 },60000);
 
-// LOOP
+// ENTRY LOOP (scan stocks, 1 position max)
 setInterval(async ()=>{
   if(!BOT_ACTIVE || !access_token || position) return;
 
-  const now=new Date();
+  const now = new Date();
   if(now.getHours()===9 && now.getMinutes()<20) return;
   if(now.getHours()===14 && now.getMinutes()>=45) return;
 
   try{
-    for(let SYMBOL of STOCKS){
+    for(const SYMBOL of STOCKS){
+      const to = new Date();
+      const from = new Date(Date.now()-50*5*60*1000);
 
-      const to=new Date();
-      const from=new Date(Date.now()-50*5*60*1000);
+      const candles = await kite.getHistoricalData(`${EXCHANGE}:${SYMBOL}`,"5minute",from,to);
+      const prices = candles.map(c=>c.close);
+      if(prices.length < 30) continue;
 
-      const candles=await kite.getHistoricalData(`${EXCHANGE}:${SYMBOL}`,"5minute",from,to);
-      const prices=candles.map(c=>c.close);
-      if(prices.length<30) continue;
+      const e9 = ema(prices,9);
+      const e21 = ema(prices,21);
 
-      const e9=ema(prices,9);
-      const e21=ema(prices,21);
+      const crossUp = e9.at(-1)>e21.at(-1) && e9.at(-2)<=e21.at(-2);
 
-      const crossUp=e9.at(-1)>e21.at(-1) && e9.at(-2)<=e21.at(-2);
+      const score = aiScore(prices, candles);
 
-      const score=aiScore(prices,candles);
+      if(crossUp && score >= 60){
+        const ltpData = await kite.getLTP([`${EXCHANGE}:${SYMBOL}`]);
+        const ltp = ltpData[`${EXCHANGE}:${SYMBOL}`].last_price;
 
-      if(crossUp && score>=60){
-        const ltpData=await kite.getLTP([`${EXCHANGE}:${SYMBOL}`]);
-        const ltp=ltpData[`${EXCHANGE}:${SYMBOL}`].last_price;
-        const qty=Math.max(1,Math.floor(MAX_TRADE_VALUE/ltp));
+        const qty = Math.max(1, Math.floor(MAX_TRADE_VALUE/ltp));
 
         await kite.placeOrder("regular",{
           exchange:EXCHANGE,
@@ -126,13 +136,14 @@ setInterval(async ()=>{
           order_type:"MARKET"
         });
 
-        position={symbol:SYMBOL,entry:ltp,qty};
-        console.log("BUY",SYMBOL,"score:",score);
+        position = {symbol:SYMBOL, entry:ltp, qty};
+        console.log("BUY", SYMBOL, "score:", score);
         break;
       }
     }
-
-  }catch(e){}
+  }catch(e){
+    console.log("Entry loop error:", e.message);
+  }
 },10000);
 
 // EXIT LOOP
@@ -140,10 +151,10 @@ setInterval(async ()=>{
   if(!position || !access_token) return;
 
   try{
-    const ltpData=await kite.getLTP([`NSE:${position.symbol}`]);
-    const ltp=ltpData[`NSE:${position.symbol}`].last_price;
+    const ltpData = await kite.getLTP([`NSE:${position.symbol}`]);
+    const ltp = ltpData[`NSE:${position.symbol}`].last_price;
 
-    const pnlPct=(ltp-position.entry)/position.entry;
+    const pnlPct = (ltp - position.entry) / position.entry;
 
     if(pnlPct<=-SL || pnlPct>=TP){
       await kite.placeOrder("regular",{
@@ -155,27 +166,38 @@ setInterval(async ()=>{
         order_type:"MARKET"
       });
 
-      console.log("EXIT",position.symbol);
-      position=null;
+      console.log("EXIT", position.symbol);
+      position = null;
     }
-
-  }catch(e){}
+  }catch(e){
+    console.log("Exit loop error:", e.message);
+  }
 },5000);
 
-// AUTO STOP
+// AUTO STOP @ 3:15
 setInterval(async ()=>{
-  const now=new Date();
+  const now = new Date();
   if(now.getHours()===15 && now.getMinutes()===15){
     if(position){
       try{
-        await kite.placeOrder("regular",{exchange:"NSE",tradingsymbol:position.symbol,transaction_type:"SELL",quantity:position.qty,product:"MIS",order_type:"MARKET"});
+        await kite.placeOrder("regular",{
+          exchange:"NSE",
+          tradingsymbol:position.symbol,
+          transaction_type:"SELL",
+          quantity:position.qty,
+          product:"MIS",
+          order_type:"MARKET"
+        });
       }catch{}
-      position=null;
+      position = null;
     }
-    BOT_ACTIVE=false;
+    BOT_ACTIVE = false;
+    console.log("AUTO STOP 3:15");
   }
 },60000);
 
+// ROOT
 app.get("/",(req,res)=>res.sendFile(path.join(__dirname,"public/index.html")));
 
-app.listen(process.env.PORT||8080,()=>console.log("ULTIMATE AI BOT RUNNING"));
+const PORT = process.env.PORT || 8080;
+app.listen(PORT,()=>console.log("ULTIMATE AI PATCH RUNNING"));
