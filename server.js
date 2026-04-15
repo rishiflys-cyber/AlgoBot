@@ -13,9 +13,8 @@ const kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
 let access_token = null;
 let BOT_ACTIVE = false;
 let position = null;
-let trades = [];
 
-const SYMBOL = "RELIANCE";
+const STOCKS = ["RELIANCE","TCS","INFY"];
 const EXCHANGE = "NSE";
 const PRODUCT = "MIS";
 
@@ -31,13 +30,13 @@ app.get("/redirect", async (req,res)=>{
     const session = await kite.generateSession(req.query.request_token, process.env.KITE_API_SECRET);
     access_token = session.access_token;
     kite.setAccessToken(access_token);
-    res.send("Login Success ✅");
+    res.send("Login Success ✅ ULTIMATE AI");
   } catch {
     res.send("Login Failed ❌");
   }
 });
 
-// MANUAL CONTROL
+// CONTROL
 app.get("/start",(req,res)=>{ BOT_ACTIVE=true; res.send("STARTED"); });
 app.get("/kill",(req,res)=>{ BOT_ACTIVE=false; res.send("STOPPED"); });
 
@@ -61,76 +60,122 @@ function ema(values, period){
   });
 }
 
-// AUTO START 9:20
+// AI SCORE
+function aiScore(prices, candles){
+  let score = 0;
+
+  const trend = Math.abs((prices.at(-1)-prices.at(-5))/prices.at(-5));
+  if(trend>0.002) score+=30;
+
+  const last = candles.at(-1);
+  const body = (last.close-last.open)/last.open;
+  if(body>0.001) score+=30;
+
+  const avgVol = candles.slice(-10).reduce((s,c)=>s+(c.volume||0),0)/10;
+  if((last.volume||0)>avgVol) score+=20;
+
+  if(prices.at(-1)>prices.at(-2) && prices.at(-2)>prices.at(-3)) score+=20;
+
+  return score;
+}
+
+// AUTO START
 setInterval(()=>{
-  const now = new Date();
+  const now=new Date();
   if(now.getHours()===9 && now.getMinutes()===20){
-    BOT_ACTIVE = true;
-    console.log("AUTO STARTED");
+    BOT_ACTIVE=true;
   }
 },60000);
 
-// TRADING LOOP
+// LOOP
 setInterval(async ()=>{
-  if(!BOT_ACTIVE || !access_token) return;
+  if(!BOT_ACTIVE || !access_token || position) return;
 
-  const now = new Date();
-  const hr = now.getHours();
-  const min = now.getMinutes();
-
-  if(hr===9 && min<20) return;
-  if(hr===14 && min>=45) return;
+  const now=new Date();
+  if(now.getHours()===9 && now.getMinutes()<20) return;
+  if(now.getHours()===14 && now.getMinutes()>=45) return;
 
   try{
-    const to = new Date();
-    const from = new Date(Date.now()-50*5*60*1000);
+    for(let SYMBOL of STOCKS){
 
-    const candles = await kite.getHistoricalData(`${EXCHANGE}:${SYMBOL}`,"5minute",from,to);
-    const prices = candles.map(c=>c.close);
-    if(prices.length < 30) return;
+      const to=new Date();
+      const from=new Date(Date.now()-50*5*60*1000);
 
-    const e9 = ema(prices,9);
-    const e21 = ema(prices,21);
+      const candles=await kite.getHistoricalData(`${EXCHANGE}:${SYMBOL}`,"5minute",from,to);
+      const prices=candles.map(c=>c.close);
+      if(prices.length<30) continue;
 
-    const crossUp = e9.at(-1)>e21.at(-1) && e9.at(-2)<=e21.at(-2);
-    const crossDown = e9.at(-1)<e21.at(-1) && e9.at(-2)>=e21.at(-2);
+      const e9=ema(prices,9);
+      const e21=ema(prices,21);
 
-    const ltpData = await kite.getLTP([`${EXCHANGE}:${SYMBOL}`]);
-    const ltp = ltpData[`${EXCHANGE}:${SYMBOL}`].last_price;
+      const crossUp=e9.at(-1)>e21.at(-1) && e9.at(-2)<=e21.at(-2);
 
-    const qty = Math.max(1, Math.floor(MAX_TRADE_VALUE/ltp));
+      const score=aiScore(prices,candles);
 
-    if(!position && crossUp){
-      await kite.placeOrder("regular",{exchange:EXCHANGE,tradingsymbol:SYMBOL,transaction_type:"BUY",quantity:qty,product:PRODUCT,order_type:"MARKET"});
-      position = {entry:ltp, qty};
-    }
+      if(crossUp && score>=60){
+        const ltpData=await kite.getLTP([`${EXCHANGE}:${SYMBOL}`]);
+        const ltp=ltpData[`${EXCHANGE}:${SYMBOL}`].last_price;
+        const qty=Math.max(1,Math.floor(MAX_TRADE_VALUE/ltp));
 
-    if(position){
-      const pnlPct = (ltp-position.entry)/position.entry;
-      if(pnlPct<=-SL || pnlPct>=TP || crossDown){
-        await kite.placeOrder("regular",{exchange:EXCHANGE,tradingsymbol:SYMBOL,transaction_type:"SELL",quantity:position.qty,product:PRODUCT,order_type:"MARKET"});
-        position = null;
+        await kite.placeOrder("regular",{
+          exchange:EXCHANGE,
+          tradingsymbol:SYMBOL,
+          transaction_type:"BUY",
+          quantity:qty,
+          product:PRODUCT,
+          order_type:"MARKET"
+        });
+
+        position={symbol:SYMBOL,entry:ltp,qty};
+        console.log("BUY",SYMBOL,"score:",score);
+        break;
       }
     }
 
   }catch(e){}
 },10000);
 
-// AUTO STOP 3:15
+// EXIT LOOP
 setInterval(async ()=>{
-  const now = new Date();
+  if(!position || !access_token) return;
+
+  try{
+    const ltpData=await kite.getLTP([`NSE:${position.symbol}`]);
+    const ltp=ltpData[`NSE:${position.symbol}`].last_price;
+
+    const pnlPct=(ltp-position.entry)/position.entry;
+
+    if(pnlPct<=-SL || pnlPct>=TP){
+      await kite.placeOrder("regular",{
+        exchange:"NSE",
+        tradingsymbol:position.symbol,
+        transaction_type:"SELL",
+        quantity:position.qty,
+        product:"MIS",
+        order_type:"MARKET"
+      });
+
+      console.log("EXIT",position.symbol);
+      position=null;
+    }
+
+  }catch(e){}
+},5000);
+
+// AUTO STOP
+setInterval(async ()=>{
+  const now=new Date();
   if(now.getHours()===15 && now.getMinutes()===15){
     if(position){
       try{
-        await kite.placeOrder("regular",{exchange:EXCHANGE,tradingsymbol:SYMBOL,transaction_type:"SELL",quantity:position.qty,product:PRODUCT,order_type:"MARKET"});
+        await kite.placeOrder("regular",{exchange:"NSE",tradingsymbol:position.symbol,transaction_type:"SELL",quantity:position.qty,product:"MIS",order_type:"MARKET"});
       }catch{}
       position=null;
     }
     BOT_ACTIVE=false;
-    console.log("AUTO STOP");
   }
 },60000);
 
 app.get("/",(req,res)=>res.sendFile(path.join(__dirname,"public/index.html")));
 
-app.listen(process.env.PORT||8080,()=>console.log("FULL AUTO BOT RUNNING"));
+app.listen(process.env.PORT||8080,()=>console.log("ULTIMATE AI BOT RUNNING"));
