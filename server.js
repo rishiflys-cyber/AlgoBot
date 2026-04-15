@@ -12,7 +12,6 @@ const kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
 
 let access_token = null;
 let BOT_ACTIVE = false;
-
 let trades = [];
 let position = null;
 
@@ -20,58 +19,60 @@ const SYMBOL = process.env.SYMBOL || "RELIANCE";
 const EXCHANGE = process.env.EXCHANGE || "NSE";
 const PRODUCT = process.env.PRODUCT || "MIS";
 
-const MAX_TRADE_VALUE = Number(process.env.MAX_TRADE_VALUE || 500); // SAFE START
+const MAX_TRADE_VALUE = Number(process.env.MAX_TRADE_VALUE || 500);
 const SL = Number(process.env.STOP_LOSS_PCT || 0.02);
 const TP = Number(process.env.TARGET_PCT || 0.03);
 
-// ---- LOGIN ----
+// LOGIN
 app.get("/login", (req,res)=> res.redirect(kite.getLoginURL()));
 
 app.get("/redirect", async (req,res)=>{
   try {
-    const session = await kite.generateSession(
-      req.query.request_token,
-      process.env.KITE_API_SECRET
-    );
+    const session = await kite.generateSession(req.query.request_token, process.env.KITE_API_SECRET);
     access_token = session.access_token;
     kite.setAccessToken(access_token);
     res.send("Login Success ✅ REAL MODE");
   } catch(e){
-    console.error(e);
-    res.status(500).send("Login Failed ❌");
+    res.send("Login Failed ❌");
   }
 });
 
-// ---- CONTROL ----
+// CONTROL
 app.get("/start",(req,res)=>{ BOT_ACTIVE=true; res.send("🚀 BOT STARTED"); });
 app.get("/kill",(req,res)=>{ BOT_ACTIVE=false; res.send("🛑 BOT STOPPED"); });
 
-// ---- DASHBOARD (REAL DATA) ----
+// FINAL CAPITAL FIX
 app.get("/dashboard", async (req,res)=>{
-  try{
-    const margins = await kite.getMargins();
+  let capital = 0;
 
-    let capital = 0;
-    if (margins && margins.equity) {
+  try {
+    const margins = await kite.getMargins("equity");
+
+    if (margins) {
       capital =
-        margins.equity.available?.cash ??
-        margins.equity.net ??
-        margins.equity.available?.live_balance ??
+        margins.available?.cash ??
+        margins.net ??
+        margins.available?.live_balance ??
         0;
     }
 
-    res.json({
-      capital,
-      trades,
-      position
-    });
-  }catch(e){
-    console.error("Dashboard error:", e.message);
-    res.json({capital: 0, trades, position, error:"Not logged in or margin fetch failed"});
+  } catch (e) {
+    console.log("Margin fetch failed");
   }
+
+  try {
+    if (!capital) {
+      const profile = await kite.getProfile();
+      capital = profile?.funds || 0;
+    }
+  } catch (e) {
+    console.log("Profile fallback failed");
+  }
+
+  res.json({ capital, trades, position });
 });
 
-// ---- EMA ----
+// EMA
 function ema(values, period){
   const k = 2/(period+1);
   let prev = values[0];
@@ -81,7 +82,7 @@ function ema(values, period){
   });
 }
 
-// ---- CORE LOOP ----
+// CORE LOOP
 setInterval(async ()=>{
   if(!BOT_ACTIVE || !access_token) return;
 
@@ -110,7 +111,6 @@ setInterval(async ()=>{
 
     const qty = Math.max(1, Math.floor(MAX_TRADE_VALUE/ltp));
 
-    // ---- BUY ----
     if(!position && crossUp){
       await kite.placeOrder("regular",{
         exchange:EXCHANGE,
@@ -122,11 +122,9 @@ setInterval(async ()=>{
       });
 
       position = {entry: ltp, qty};
-      trades.push({type:"BUY", price:ltp, time: new Date().toISOString()});
-      console.log("BUY REAL", SYMBOL, ltp, qty);
+      trades.push({type:"BUY", price:ltp});
     }
 
-    // ---- SELL ----
     if(position){
       const pnlPct = (ltp-position.entry)/position.entry;
 
@@ -140,21 +138,17 @@ setInterval(async ()=>{
           order_type:"MARKET"
         });
 
-        trades.push({type:"SELL", price:ltp, time: new Date().toISOString()});
-        console.log("SELL REAL", SYMBOL, ltp);
-
+        trades.push({type:"SELL", price:ltp});
         position = null;
       }
     }
 
   }catch(e){
-    console.log("ERROR:", e.message);
+    console.log(e.message);
   }
 
 },10000);
 
-// ---- UI ----
 app.get("/",(req,res)=>res.sendFile(path.join(__dirname,"public/index.html")));
 
-const PORT = process.env.PORT || 8080;
-app.listen(PORT,()=>console.log("REAL MONEY BOT RUNNING"));
+app.listen(process.env.PORT || 8080,()=>console.log("FINAL REAL BOT RUNNING"));
