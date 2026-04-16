@@ -1,20 +1,18 @@
 
 <!DOCTYPE html>
 <html>
-<head><title>AlgoBot</title></head>
 <body>
-<h1>🚀 FINAL BOT</h1>
+<h1>🚀 8.5 LEVEL BOT</h1>
 <button onclick="location.href='/login'">Login</button>
 <button onclick="fetch('/start')">Start</button>
 <button onclick="fetch('/kill')">Kill</button>
-<pre id="data"></pre>
+<pre id="d"></pre>
 <script>
-async function load(){
- let r = await fetch('/dashboard');
- let d = await r.json();
- document.getElementById("data").innerText = JSON.stringify(d,null,2);
+async function l(){
+ let r=await fetch('/dashboard'); let d=await r.json();
+ document.getElementById("d").innerText=JSON.stringify(d,null,2);
 }
-setInterval(load,2000);
+setInterval(l,2000);
 </script>
 </body>
 </html>
