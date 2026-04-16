@@ -14,9 +14,14 @@ let access_token = null;
 let BOT_ACTIVE = false;
 let position = null;
 let tradesToday = 0;
-let lastTradeTime = null;
+let capital = 0;
+let entryPrice = 0;
+let pnl = 0;
 
-console.log("🚀 REAL TRADING BOT LIVE");
+const SL_PERCENT = 0.01;
+const TP_PERCENT = 0.02;
+
+console.log("🚀 FULL UPGRADE BOT");
 
 // LOGIN
 app.get("/login",(req,res)=>res.redirect(kite.getLoginURL()));
@@ -26,8 +31,12 @@ app.get("/redirect", async (req,res)=>{
   const session = await kite.generateSession(req.query.request_token, process.env.KITE_API_SECRET);
   access_token = session.access_token;
   kite.setAccessToken(access_token);
+
+  const m = await kite.getMargins();
+  capital = m?.equity?.net || 0;
+
   res.send("Login Success ✅");
- }catch(e){
+ }catch{
   res.send("Login Failed ❌");
  }
 });
@@ -38,10 +47,10 @@ app.get("/kill",(req,res)=>{BOT_ACTIVE=false;res.send("STOPPED")});
 
 // DASHBOARD
 app.get("/dashboard",(req,res)=>{
- res.json({BOT_ACTIVE,position,tradesToday});
+ res.json({capital,BOT_ACTIVE,position,tradesToday,pnl});
 });
 
-// SIMPLE REAL LOGIC
+// PRICE
 async function getPrice(){
  try{
   const q = await kite.getLTP(["NSE:RELIANCE"]);
@@ -51,10 +60,11 @@ async function getPrice(){
  }
 }
 
+// SMART SIGNAL
 function getSignal(price, prev){
  if(!prev) return null;
- if(price > prev * 1.002) return "BUY";
- if(price < prev * 0.998) return "SELL";
+ if(price > prev * 1.003) return "BUY";
+ if(price < prev * 0.997) return "SELL";
  return null;
 }
 
@@ -67,6 +77,17 @@ setInterval(async ()=>{
 
  const price = await getPrice();
  if(!price) return;
+
+ // manage open position
+ if(position){
+   if(position === "BUY"){
+     if(price <= entryPrice*(1-SL_PERCENT) || price >= entryPrice*(1+TP_PERCENT)){
+       pnl += (price - entryPrice);
+       position = null;
+     }
+   }
+   return;
+ }
 
  const signal = getSignal(price, lastPrice);
  lastPrice = price;
@@ -84,10 +105,10 @@ setInterval(async ()=>{
   });
 
   position = signal;
+  entryPrice = price;
   tradesToday++;
-  lastTradeTime = new Date();
 
-  console.log("TRADE EXECUTED:", signal, price);
+  console.log("TRADE:", signal, price);
 
  }catch(e){
   console.log("Order failed");
@@ -98,8 +119,9 @@ setInterval(async ()=>{
 // RESET DAILY
 setInterval(()=>{
  tradesToday = 0;
+ pnl = 0;
 },86400000);
 
-// PORT FIX
+// PORT
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, ()=>console.log("Server running on", PORT));
