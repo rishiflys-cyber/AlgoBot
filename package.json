@@ -1,6 +1,6 @@
 
 {
-  "name": "algobot-real-fixed",
+  "name": "algobot-real-trading",
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
