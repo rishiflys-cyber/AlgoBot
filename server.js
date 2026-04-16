@@ -43,4 +43,6 @@ setInterval(()=>{
 
 },4000);
 
-app.listen(3000,()=>console.log("AlgoBot FINAL running"));
+// ✅ FIXED PORT FOR RAILWAY
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log("Server running on", PORT));

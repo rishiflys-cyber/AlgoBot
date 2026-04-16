@@ -1,6 +1,6 @@
 
 {
-  "name": "algobot-real-final",
+  "name": "algobot-fixed",
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
