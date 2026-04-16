@@ -1,4 +1,4 @@
-<h1>🚀 7.5 CLEAN BOT</h1>
+<h1>🚀 FINAL 7.5 BOT</h1>
 
 <button onclick="fetch('/start')">Start</button>
 <button onclick="fetch('/kill')">Kill</button>
@@ -7,11 +7,11 @@
 <pre id="data"></pre>
 
 <script>
-async function load() {
-  const res = await fetch('/dashboard');
-  const data = await res.json();
-  document.getElementById('data').innerText = JSON.stringify(data, null, 2);
+async function load(){
+ const r=await fetch('/dashboard');
+ const d=await r.json();
+ document.getElementById('data').innerText=JSON.stringify(d,null,2);
 }
-setInterval(load, 2000);
+setInterval(load,2000);
 load();
 </script>
