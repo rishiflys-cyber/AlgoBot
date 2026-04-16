@@ -10,27 +10,27 @@ app.use(express.static(path.join(__dirname, "public")));
 
 const kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
 
-let access_token=null, BOT_ACTIVE=false, tradesToday=0;
-let position=null, entryPrice=0, pnl=0, capital=0;
+let access_token=null, BOT_ACTIVE=false;
+let tradesToday=0, position=null, entryPrice=0;
+let pnl=0, capital=0, lossStreak=0;
 
-let lossStreak=0, lastPrice=null;
-
-// ===== ADVANCED CONFIG (v8.5) =====
 const CONFIG = {
   MAX_TRADES:2,
-  SL:0.01,
-  TP:0.02,
-  TRAIL:0.005,
+  SL:0.008,
+  TP:0.018,
+  TRAIL:0.004,
   PRICE_JUMP:0.002,
   VOL_FILTER:0.0015,
-  TIME_START:9,
-  TIME_END:15,
-  LOSS_STREAK_LIMIT:3,
-  DAILY_LOSS_LIMIT:0.02
+  LOSS_STREAK_LIMIT:2,
+  RETRY:3,
+  SLIPPAGE:0.001
 };
 
-// ===== LOGIN =====
+let lastPrice=null;
+
+// LOGIN
 app.get("/login",(req,res)=>res.redirect(kite.getLoginURL()));
+
 app.get("/redirect", async (req,res)=>{
  try{
   const s=await kite.generateSession(req.query.request_token, process.env.KITE_API_SECRET);
@@ -42,11 +42,11 @@ app.get("/redirect", async (req,res)=>{
  }catch{res.send("Login Failed")}
 });
 
-// ===== CONTROL =====
+// CONTROL
 app.get("/start",(req,res)=>{BOT_ACTIVE=true;res.send("STARTED")});
 app.get("/kill",(req,res)=>{BOT_ACTIVE=false;res.send("STOPPED")});
 
-// ===== DASHBOARD =====
+// DASHBOARD
 app.get("/dashboard", async (req,res)=>{
  try{
   if(access_token){
@@ -57,7 +57,7 @@ app.get("/dashboard", async (req,res)=>{
  res.json({capital,BOT_ACTIVE,position,tradesToday,pnl,lossStreak});
 });
 
-// ===== PRICE =====
+// PRICE
 async function getPrice(){
  try{
   const q=await kite.getLTP(["NSE:RELIANCE"]);
@@ -65,27 +65,42 @@ async function getPrice(){
  }catch{return null;}
 }
 
-// ===== SIGNAL (improved) =====
+// SIGNAL
 function getSignal(price){
  if(!lastPrice) return null;
  let change=(price-lastPrice)/lastPrice;
-
- if(Math.abs(change) < CONFIG.VOL_FILTER) return null;
-
- if(change > CONFIG.PRICE_JUMP) return "BUY";
- if(change < -CONFIG.PRICE_JUMP) return "SELL";
+ if(Math.abs(change)<CONFIG.VOL_FILTER) return null;
+ if(change>CONFIG.PRICE_JUMP) return "BUY";
+ if(change<-CONFIG.PRICE_JUMP) return "SELL";
  return null;
 }
 
-// ===== LOOP =====
+// EXECUTION (LIMIT + RETRY)
+async function placeOrder(type, price){
+ let limitPrice = type==="BUY" ? price*(1+CONFIG.SLIPPAGE) : price*(1-CONFIG.SLIPPAGE);
+
+ for(let i=0;i<CONFIG.RETRY;i++){
+  try{
+    await kite.placeOrder("regular",{
+      exchange:"NSE",
+      tradingsymbol:"RELIANCE",
+      transaction_type:type,
+      quantity:1,
+      product:"MIS",
+      order_type:"LIMIT",
+      price:limitPrice
+    });
+    return true;
+  }catch{}
+ }
+ return false;
+}
+
+// LOOP
 setInterval(async ()=>{
  if(!BOT_ACTIVE || !access_token) return;
-
- const hour = new Date().getHours();
- if(hour < CONFIG.TIME_START || hour > CONFIG.TIME_END) return;
-
- if(tradesToday >= CONFIG.MAX_TRADES) return;
- if(lossStreak >= CONFIG.LOSS_STREAK_LIMIT) return;
+ if(tradesToday>=CONFIG.MAX_TRADES) return;
+ if(lossStreak>=CONFIG.LOSS_STREAK_LIMIT) return;
 
  const price = await getPrice();
  if(!price) return;
@@ -95,35 +110,24 @@ setInterval(async ()=>{
    let exit=false;
 
    if(position==="BUY"){
-     if(price <= entryPrice*(1-CONFIG.SL)) { pnl -= entryPrice*CONFIG.SL; lossStreak++; exit=true; }
-     if(price >= entryPrice*(1+CONFIG.TP)) { pnl += entryPrice*CONFIG.TP; lossStreak=0; exit=true; }
+     if(price<=entryPrice*(1-CONFIG.SL)){ pnl-=entryPrice*CONFIG.SL; lossStreak++; exit=true; }
+     if(price>=entryPrice*(1+CONFIG.TP)){ pnl+=entryPrice*CONFIG.TP; lossStreak=0; exit=true; }
    }
 
-   if(exit){
-     position=null;
-   }
+   if(exit) position=null;
    return;
  }
 
- const signal = getSignal(price);
- lastPrice = price;
+ const signal=getSignal(price);
+ lastPrice=price;
  if(!signal) return;
 
- try{
-  await kite.placeOrder("regular",{
-   exchange:"NSE",
-   tradingsymbol:"RELIANCE",
-   transaction_type:signal,
-   quantity:1,
-   product:"MIS",
-   order_type:"MARKET"
-  });
+ const ok = await placeOrder(signal, price);
+ if(!ok) return;
 
-  position=signal;
-  entryPrice=price;
-  tradesToday++;
-
- }catch{}
+ position=signal;
+ entryPrice=price;
+ tradesToday++;
 
 },3000);
 
@@ -132,4 +136,4 @@ setInterval(()=>{tradesToday=0;pnl=0;lossStreak=0},86400000);
 
 // PORT
 const PORT=process.env.PORT||3000;
-app.listen(PORT,()=>console.log("8.5 BOT RUNNING",PORT));
+app.listen(PORT,()=>console.log("EXECUTION UPGRADE RUNNING",PORT));
