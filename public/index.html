@@ -1,15 +1,20 @@
+
 <!DOCTYPE html>
-<html><body>
-<h2>IST AUTO BOT</h2>
+<html>
+<body>
+<h2>FINAL IST BOT</h2>
 <button onclick="location.href='/login'">Login</button>
 <button onclick="fetch('/start')">Start</button>
 <button onclick="fetch('/kill')">Kill</button>
+<button onclick="load()">Live Scan</button>
 <pre id="d"></pre>
 <script>
-setInterval(async()=>{
+async function load(){
  let r=await fetch('/status');
  let d=await r.json();
- document.getElementById('d').innerText=JSON.stringify(d,null,2);
-},3000);
+ document.getElementById("d").innerText=JSON.stringify(d,null,2);
+}
+setInterval(load,3000);
 </script>
-</body></html>
+</body>
+</html>
