@@ -5,8 +5,6 @@ const { KiteConnect } = require("kiteconnect");
 
 const app = express();
 app.use(express.json());
-
-// ✅ FIXED UI PATH
 app.use(express.static(path.join(__dirname, "../public")));
 
 const kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
@@ -14,6 +12,10 @@ const kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
 let access_token = null;
 let BOT_ACTIVE = false;
 let lastScan = [];
+
+let activeTrade = null;
+
+const STOCKS = ["RELIANCE","HDFCBANK","ICICIBANK","INFY","TCS"];
 
 // ===== LOGIN =====
 app.get("/login", (req, res) => {
@@ -29,7 +31,7 @@ app.get("/redirect", async (req, res) => {
     access_token = session.access_token;
     kite.setAccessToken(access_token);
     res.send("OK");
-  } catch (e) {
+  } catch {
     res.send("Login Failed");
   }
 });
@@ -50,18 +52,95 @@ app.get("/status", (req, res) => {
   res.json(lastScan);
 });
 
-// ===== BASIC SCAN LOOP (WORKING) =====
-const STOCKS = ["RELIANCE","HDFCBANK","ICICIBANK","INFY","TCS"];
+// ===== SIMPLE SIGNAL =====
+let lastPrice = {};
 
+function getSignal(price, prev) {
+  if (!prev) return null;
+  let change = (price - prev) / prev;
+
+  if (change > 0.002) return "BUY";
+  if (change < -0.002) return "SELL";
+  return null;
+}
+
+// ===== MAIN LOOP =====
 setInterval(async () => {
   if (!BOT_ACTIVE || !access_token) return;
 
   try {
     const prices = await kite.getLTP(STOCKS.map(s => `NSE:${s}`));
-    lastScan = STOCKS.map(s => ({
-      symbol: s,
-      price: prices[`NSE:${s}`].last_price
-    }));
+
+    lastScan = [];
+
+    let best = null;
+    let bestScore = 0;
+
+    for (let s of STOCKS) {
+      let price = prices[`NSE:${s}`].last_price;
+      let prev = lastPrice[s];
+
+      let signal = getSignal(price, prev);
+      let score = prev ? Math.abs((price - prev) / prev) : 0;
+
+      lastScan.push({ symbol: s, price, signal, score });
+
+      if (score > bestScore && signal) {
+        bestScore = score;
+        best = { symbol: s, price, signal };
+      }
+
+      lastPrice[s] = price;
+    }
+
+    // ===== EXIT =====
+    if (activeTrade) {
+      let price = prices[`NSE:${activeTrade.symbol}`].last_price;
+
+      let exit = false;
+
+      if (activeTrade.type === "BUY") {
+        if (price <= activeTrade.entry * 0.99) exit = true;
+        if (price >= activeTrade.entry * 1.02) exit = true;
+      } else {
+        if (price >= activeTrade.entry * 1.01) exit = true;
+        if (price <= activeTrade.entry * 0.98) exit = true;
+      }
+
+      if (exit) {
+        await kite.placeOrder("regular", {
+          exchange: "NSE",
+          tradingsymbol: activeTrade.symbol,
+          transaction_type: activeTrade.type === "BUY" ? "SELL" : "BUY",
+          quantity: 1,
+          product: "MIS",
+          order_type: "MARKET"
+        });
+
+        activeTrade = null;
+      }
+
+      return;
+    }
+
+    // ===== ENTRY =====
+    if (!best) return;
+
+    await kite.placeOrder("regular", {
+      exchange: "NSE",
+      tradingsymbol: best.symbol,
+      transaction_type: best.signal,
+      quantity: 1,
+      product: "MIS",
+      order_type: "MARKET"
+    });
+
+    activeTrade = {
+      symbol: best.symbol,
+      type: best.signal,
+      entry: best.price
+    };
+
   } catch (e) {}
 }, 3000);
 
@@ -71,4 +150,4 @@ app.get("/", (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("ENGINE RUNNING"));
+app.listen(PORT, () => console.log("BOT RUNNING"));
