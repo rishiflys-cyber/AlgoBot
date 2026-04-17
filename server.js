@@ -11,23 +11,23 @@ app.use(express.static(path.join(__dirname, "public")));
 const kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
 
 let access_token=null, BOT_ACTIVE=false, activeTrade=null, lastScan=[];
-const STOCKS=["RELIANCE","HDFCBANK","ICICIBANK","INFY","TCS"];
+let lastPrice={}, lossStreak=0, dailyPnL=0;
 
-let lastPrice={};
+const STOCKS=["RELIANCE","HDFCBANK","ICICIBANK","INFY","TCS"];
 
 // IST TIME
 function getIST(){
  const now=new Date();
  return new Date(now.toLocaleString("en-US",{timeZone:"Asia/Kolkata"}));
 }
-function getMins(){
+function mins(){
  let t=getIST();
  return t.getHours()*60+t.getMinutes();
 }
 
-// AUTO
+// AUTO START/STOP
 setInterval(()=>{
- let m=getMins();
+ let m=mins();
  if(m===560) BOT_ACTIVE=true;
  if(m===930) BOT_ACTIVE=false;
 },60000);
@@ -46,19 +46,23 @@ app.get("/start",(req,res)=>{BOT_ACTIVE=true;res.send("STARTED")});
 app.get("/kill",(req,res)=>{BOT_ACTIVE=false;res.send("STOPPED")});
 app.get("/status",(req,res)=>res.json(lastScan));
 
-// IMPROVED SIGNAL (multi condition)
-function signal(p,prev){
+// STRATEGY (multi-layer)
+function getSignal(p,prev){
  if(!prev) return null;
  let change=(p-prev)/prev;
 
- if(change>0.0015) return "BUY";   // faster than before
+ if(change>0.0015) return "BUY";
  if(change<-0.0015) return "SELL";
  return null;
 }
 
 // MAIN LOOP
 setInterval(async()=>{
- if(!BOT_ACTIVE||!access_token) return;
+ if(!BOT_ACTIVE || !access_token) return;
+
+ // risk control
+ if(lossStreak>=3) return;
+ if(dailyPnL<=-0.02) return;
 
  try{
  const prices=await kite.getLTP(STOCKS.map(s=>`NSE:${s}`));
@@ -69,39 +73,46 @@ setInterval(async()=>{
   let p=prices[`NSE:${s}`].last_price;
   let prev=lastPrice[s];
 
-  let sig=signal(p,prev);
+  let signal=getSignal(p,prev);
   let score=prev?Math.abs((p-prev)/prev):0;
 
-  lastScan.push({symbol:s,price:p,signal:sig,score});
+  lastScan.push({symbol:s,price:p,signal,score});
 
-  if(sig && score>bestScore){
+  if(signal && score>bestScore){
     bestScore=score;
-    best={symbol:s,price:p,signal:sig};
+    best={symbol:s,price:p,signal};
   }
 
   lastPrice[s]=p;
  }
 
- // EXIT (improved)
+ // EXIT
  if(activeTrade){
   let p=prices[`NSE:${activeTrade.symbol}`].last_price;
-  let exit=false;
+  let pnl=0;
 
   if(activeTrade.type==="BUY"){
-    if(p<=activeTrade.entry*0.995 || p>=activeTrade.entry*1.015) exit=true;
-  }else{
-    if(p>=activeTrade.entry*1.005 || p<=activeTrade.entry*0.985) exit=true;
-  }
-
-  if(exit){
-    await kite.placeOrder("regular",{exchange:"NSE",tradingsymbol:activeTrade.symbol,transaction_type:activeTrade.type==="BUY"?"SELL":"BUY",quantity:1,product:"MIS",order_type:"MARKET"});
-    activeTrade=null;
+    pnl=(p-activeTrade.entry)/activeTrade.entry;
+    if(pnl>=0.01 || pnl<=-0.005){
+      await kite.placeOrder("regular",{exchange:"NSE",tradingsymbol:activeTrade.symbol,transaction_type:"SELL",quantity:1,product:"MIS",order_type:"MARKET"});
+      dailyPnL+=pnl;
+      pnl<0?lossStreak++:lossStreak=0;
+      activeTrade=null;
+    }
+  } else {
+    pnl=(activeTrade.entry-p)/activeTrade.entry;
+    if(pnl>=0.01 || pnl<=-0.005){
+      await kite.placeOrder("regular",{exchange:"NSE",tradingsymbol:activeTrade.symbol,transaction_type:"BUY",quantity:1,product:"MIS",order_type:"MARKET"});
+      dailyPnL+=pnl;
+      pnl<0?lossStreak++:lossStreak=0;
+      activeTrade=null;
+    }
   }
   return;
  }
 
  // ENTRY
- if(best){
+ if(best && bestScore>0.0012){
   await kite.placeOrder("regular",{exchange:"NSE",tradingsymbol:best.symbol,transaction_type:best.signal,quantity:1,product:"MIS",order_type:"MARKET"});
   activeTrade={symbol:best.symbol,type:best.signal,entry:best.price};
  }
