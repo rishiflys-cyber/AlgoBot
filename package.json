@@ -1,5 +1,5 @@
 {
-  "name": "algobot-true9",
+  "name": "algobot-final-visibility",
   "version": "1.0.0",
   "main": "server.js",
   "scripts": { "start": "node server.js" },

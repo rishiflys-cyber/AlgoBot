@@ -11,9 +11,9 @@ const kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
 
 let access_token=null, BOT_ACTIVE=false;
 let capital=0, tradesToday=0;
-
 let activeTrade=null;
 let tradeLog=[];
+let lastScan=[];
 
 const STOCKS = ["RELIANCE","HDFCBANK","ICICIBANK","INFY","TCS","SBIN","ITC","LT","AXISBANK","KOTAKBANK"];
 
@@ -22,7 +22,7 @@ const CONFIG = {
  SL:0.01,
  TP:0.02,
  RISK:0.01,
- MIN_SCORE:0.002
+ MIN_SCORE:0.0012
 };
 
 app.get("/login",(req,res)=>res.redirect(kite.getLoginURL()));
@@ -49,19 +49,8 @@ app.get("/dashboard", async (req,res)=>{
  res.json({capital,BOT_ACTIVE,tradesToday,activeTrade});
 });
 
-app.get("/performance",(req,res)=>{
- let wins = tradeLog.filter(t=>t.pnl>0).length;
- let losses = tradeLog.filter(t=>t.pnl<0).length;
- let total = tradeLog.length;
-
- let avgWin = wins ? tradeLog.filter(t=>t.pnl>0).reduce((a,b)=>a+b.pnl,0)/wins : 0;
- let avgLoss = losses ? Math.abs(tradeLog.filter(t=>t.pnl<0).reduce((a,b)=>a+b.pnl,0)/losses) : 0;
-
- let winRate = total ? (wins/total)*100 : 0;
- let rr = avgLoss ? avgWin/avgLoss : 0;
- let expectancy = (winRate/100)*avgWin - (1-winRate/100)*avgLoss;
-
- res.json({total,wins,losses,winRate,avgWin,avgLoss,rr,expectancy});
+app.get("/status",(req,res)=>{
+ res.json(lastScan);
 });
 
 async function getPrices(){
@@ -101,59 +90,69 @@ let last={};
 setInterval(async ()=>{
  if(!BOT_ACTIVE || !access_token) return;
 
- if(activeTrade){
-  let price = await getPrice(activeTrade.symbol);
-  if(!price) return;
-
-  let exit=false, pnl=0;
-
-  if(activeTrade.type==="BUY"){
-    if(price<=activeTrade.entry*(1-CONFIG.SL) || price>=activeTrade.entry*(1+CONFIG.TP)){
-      pnl=(price-activeTrade.entry)*activeTrade.qty;
-      exit=true;
-    }
-  }
-
-  if(activeTrade.type==="SELL"){
-    if(price>=activeTrade.entry*(1+CONFIG.SL) || price<=activeTrade.entry*(1-CONFIG.TP)){
-      pnl=(activeTrade.entry-price)*activeTrade.qty;
-      exit=true;
-    }
-  }
-
-  if(exit){
-    await kite.placeOrder("regular",{
-      exchange:"NSE",
-      tradingsymbol:activeTrade.symbol,
-      transaction_type: activeTrade.type==="BUY"?"SELL":"BUY",
-      quantity:activeTrade.qty,
-      product:"MIS",
-      order_type:"MARKET"
-    });
-
-    tradeLog.push({pnl});
-    activeTrade=null;
-  }
-
-  return;
- }
-
- if(tradesToday>=CONFIG.MAX_TRADES) return;
-
  const prices = await getPrices();
  if(!prices) return;
+
+ lastScan=[];
 
  let best=null, bestScore=0;
 
  for(let s of STOCKS){
    let p=prices[`NSE:${s}`].last_price;
    let sc=score(p,last[s]);
+   let sig=getSignal(p,last[s]);
+
+   let decision="SKIP";
+   if(sc>CONFIG.MIN_SCORE && sig) decision="READY";
+
+   lastScan.push({symbol:s,price:p,score:sc,signal:sig,decision});
+
    if(sc>bestScore){
      bestScore=sc;
      best={symbol:s, price:p, prev:last[s]};
    }
+
    last[s]=p;
  }
+
+ if(activeTrade){
+   let price = await getPrice(activeTrade.symbol);
+   if(!price) return;
+
+   let exit=false, pnl=0;
+
+   if(activeTrade.type==="BUY"){
+     if(price<=activeTrade.entry*(1-CONFIG.SL) || price>=activeTrade.entry*(1+CONFIG.TP)){
+       pnl=(price-activeTrade.entry)*activeTrade.qty;
+       exit=true;
+     }
+   }
+
+   if(activeTrade.type==="SELL"){
+     if(price>=activeTrade.entry*(1+CONFIG.SL) || price<=activeTrade.entry*(1-CONFIG.TP)){
+       pnl=(activeTrade.entry-price)*activeTrade.qty;
+       exit=true;
+     }
+   }
+
+   if(exit){
+     await kite.placeOrder("regular",{
+       exchange:"NSE",
+       tradingsymbol:activeTrade.symbol,
+       transaction_type: activeTrade.type==="BUY"?"SELL":"BUY",
+       quantity:activeTrade.qty,
+       product:"MIS",
+       order_type:"MARKET"
+     });
+
+     tradeLog.push({pnl});
+     activeTrade=null;
+   }
+
+   return;
+ }
+
+ if(tradesToday>=CONFIG.MAX_TRADES) return;
 
  if(!best || bestScore<CONFIG.MIN_SCORE) return;
 
@@ -180,4 +179,4 @@ setInterval(async ()=>{
 setInterval(()=>{tradesToday=0},86400000);
 
 const PORT=process.env.PORT||3000;
-app.listen(PORT,()=>console.log("TRUE 9 BOT RUNNING"));
+app.listen(PORT,()=>console.log("FINAL VISIBILITY BOT RUNNING"));
