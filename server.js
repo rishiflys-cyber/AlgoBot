@@ -14,6 +14,8 @@ let capital=0, tradesToday=0;
 let activeTrade=null;
 let tradeLog=[];
 let lastScan=[];
+let lossStreak=0;
+let dailyPnL=0;
 
 const STOCKS = ["RELIANCE","HDFCBANK","ICICIBANK","INFY","TCS","SBIN","ITC","LT","AXISBANK","KOTAKBANK"];
 
@@ -22,7 +24,9 @@ const CONFIG = {
  SL:0.01,
  TP:0.02,
  RISK:0.01,
- MIN_SCORE:0.0012
+ BASE_SCORE:0.0012,
+ MAX_DD:-0.025,
+ MAX_LOSS_STREAK:3
 };
 
 app.get("/login",(req,res)=>res.redirect(kite.getLoginURL()));
@@ -46,12 +50,10 @@ app.get("/dashboard", async (req,res)=>{
     capital=m?.equity?.net||0;
   }
  }catch{}
- res.json({capital,BOT_ACTIVE,tradesToday,activeTrade});
+ res.json({capital,BOT_ACTIVE,tradesToday,activeTrade,lossStreak,dailyPnL});
 });
 
-app.get("/status",(req,res)=>{
- res.json(lastScan);
-});
+app.get("/status",(req,res)=>res.json(lastScan));
 
 async function getPrices(){
  try{
@@ -59,16 +61,16 @@ async function getPrices(){
  }catch{return null;}
 }
 
-async function getPrice(symbol){
- try{
-  const q=await kite.getLTP([`NSE:${symbol}`]);
-  return q[`NSE:${symbol}`].last_price;
- }catch{return null;}
+function regime(vol){
+ if(vol>0.003) return "TRENDING";
+ if(vol<0.001) return "SIDEWAYS";
+ return "NORMAL";
 }
 
-function score(price, prev){
- if(!prev) return 0;
- return Math.abs((price-prev)/prev);
+function adaptiveThreshold(vol){
+ if(vol>0.003) return CONFIG.BASE_SCORE*1.2;
+ if(vol<0.001) return CONFIG.BASE_SCORE*0.8;
+ return CONFIG.BASE_SCORE;
 }
 
 function getSignal(price, prev){
@@ -90,47 +92,51 @@ let last={};
 setInterval(async ()=>{
  if(!BOT_ACTIVE || !access_token) return;
 
+ if(dailyPnL <= CONFIG.MAX_DD*capital) return;
+ if(lossStreak >= CONFIG.MAX_LOSS_STREAK) return;
+
  const prices = await getPrices();
  if(!prices) return;
 
  lastScan=[];
-
  let best=null, bestScore=0;
 
  for(let s of STOCKS){
    let p=prices[`NSE:${s}`].last_price;
-   let sc=score(p,last[s]);
-   let sig=getSignal(p,last[s]);
+   let prev=last[s];
+
+   let vol = prev ? Math.abs((p-prev)/prev) : 0;
+   let reg = regime(vol);
+   let threshold = adaptiveThreshold(vol);
+   let signal=getSignal(p,prev);
+   let sc = vol;
 
    let decision="SKIP";
-   if(sc>CONFIG.MIN_SCORE && sig) decision="READY";
+   if(sc>threshold && signal && reg!=="SIDEWAYS") decision="READY";
 
-   lastScan.push({symbol:s,price:p,score:sc,signal:sig,decision});
+   lastScan.push({symbol:s,price:p,score:sc,signal,regime:reg,decision});
 
    if(sc>bestScore){
      bestScore=sc;
-     best={symbol:s, price:p, prev:last[s]};
+     best={symbol:s, price:p, prev};
    }
 
    last[s]=p;
  }
 
  if(activeTrade){
-   let price = await getPrice(activeTrade.symbol);
-   if(!price) return;
+   const p = prices[`NSE:${activeTrade.symbol}`].last_price;
 
    let exit=false, pnl=0;
 
    if(activeTrade.type==="BUY"){
-     if(price<=activeTrade.entry*(1-CONFIG.SL) || price>=activeTrade.entry*(1+CONFIG.TP)){
-       pnl=(price-activeTrade.entry)*activeTrade.qty;
+     if(p<=activeTrade.entry*(1-CONFIG.SL) || p>=activeTrade.entry*(1+CONFIG.TP)){
+       pnl=(p-activeTrade.entry)*activeTrade.qty;
        exit=true;
      }
-   }
-
-   if(activeTrade.type==="SELL"){
-     if(price>=activeTrade.entry*(1+CONFIG.SL) || price<=activeTrade.entry*(1-CONFIG.TP)){
-       pnl=(activeTrade.entry-price)*activeTrade.qty;
+   } else {
+     if(p>=activeTrade.entry*(1+CONFIG.SL) || p<=activeTrade.entry*(1-CONFIG.TP)){
+       pnl=(activeTrade.entry-p)*activeTrade.qty;
        exit=true;
      }
    }
@@ -146,6 +152,9 @@ setInterval(async ()=>{
      });
 
      tradeLog.push({pnl});
+     dailyPnL += pnl;
+     if(pnl<0) lossStreak++; else lossStreak=0;
+
      activeTrade=null;
    }
 
@@ -153,8 +162,7 @@ setInterval(async ()=>{
  }
 
  if(tradesToday>=CONFIG.MAX_TRADES) return;
-
- if(!best || bestScore<CONFIG.MIN_SCORE) return;
+ if(!best || bestScore<CONFIG.BASE_SCORE) return;
 
  let signal=getSignal(best.price,best.prev);
  if(!signal) return;
@@ -176,7 +184,11 @@ setInterval(async ()=>{
 
 },3000);
 
-setInterval(()=>{tradesToday=0},86400000);
+setInterval(()=>{
+ tradesToday=0;
+ dailyPnL=0;
+ lossStreak=0;
+},86400000);
 
 const PORT=process.env.PORT||3000;
-app.listen(PORT,()=>console.log("FINAL VISIBILITY BOT RUNNING"));
+app.listen(PORT,()=>console.log("8.5 FINAL BOT RUNNING"));
