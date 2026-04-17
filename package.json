@@ -1,5 +1,5 @@
 {
-  "name": "algobot-8-5-final",
+  "name": "algobot-9-final",
   "version": "1.0.0",
   "main": "server.js",
   "scripts": { "start": "node server.js" },

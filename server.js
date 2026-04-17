@@ -1,3 +1,4 @@
+
 require("dotenv").config();
 const express = require("express");
 const path = require("path");
@@ -24,7 +25,7 @@ const CONFIG = {
  SL:0.01,
  TP:0.02,
  RISK:0.01,
- BASE_SCORE:0.0012,
+ BASE_SCORE:0.0015,
  MAX_DD:-0.025,
  MAX_LOSS_STREAK:3
 };
@@ -55,22 +56,23 @@ app.get("/dashboard", async (req,res)=>{
 
 app.get("/status",(req,res)=>res.json(lastScan));
 
+// ===== HELPERS =====
 async function getPrices(){
  try{
   return await kite.getLTP(STOCKS.map(s=>`NSE:${s}`));
  }catch{return null;}
 }
 
+function isMarketTime(){
+ let now=new Date();
+ let t=now.getHours()*60+now.getMinutes();
+ return t>=560 && t<=885; // 9:20–14:45
+}
+
 function regime(vol){
  if(vol>0.003) return "TRENDING";
  if(vol<0.001) return "SIDEWAYS";
  return "NORMAL";
-}
-
-function adaptiveThreshold(vol){
- if(vol>0.003) return CONFIG.BASE_SCORE*1.2;
- if(vol<0.001) return CONFIG.BASE_SCORE*0.8;
- return CONFIG.BASE_SCORE;
 }
 
 function getSignal(price, prev){
@@ -81,17 +83,25 @@ function getSignal(price, prev){
  return null;
 }
 
-function qty(price){
+function calculateScore(price, prev, trendAlign){
+ if(!prev) return 0;
+ let m = Math.abs((price-prev)/prev);
+ return (m*0.4)+(m*0.3)+(trendAlign?0.3:0);
+}
+
+function qty(price, vol){
  let risk=capital*CONFIG.RISK;
+ let adj = vol>0.003 ? 0.7 : 1;
  let sl=price*CONFIG.SL;
- return Math.max(1,Math.floor(risk/sl));
+ return Math.max(1,Math.floor((risk*adj)/sl));
 }
 
 let last={};
 
+// ===== MAIN LOOP =====
 setInterval(async ()=>{
  if(!BOT_ACTIVE || !access_token) return;
-
+ if(!isMarketTime()) return;
  if(dailyPnL <= CONFIG.MAX_DD*capital) return;
  if(lossStreak >= CONFIG.MAX_LOSS_STREAK) return;
 
@@ -107,18 +117,18 @@ setInterval(async ()=>{
 
    let vol = prev ? Math.abs((p-prev)/prev) : 0;
    let reg = regime(vol);
-   let threshold = adaptiveThreshold(vol);
-   let signal=getSignal(p,prev);
-   let sc = vol;
+   let sig = getSignal(p,prev);
+   let trendAlign = sig && ((p>prev && sig==="BUY")||(p<prev && sig==="SELL"));
+   let sc = calculateScore(p,prev,trendAlign);
 
    let decision="SKIP";
-   if(sc>threshold && signal && reg!=="SIDEWAYS") decision="READY";
+   if(sc>CONFIG.BASE_SCORE && sig && reg!=="SIDEWAYS" && trendAlign) decision="READY";
 
-   lastScan.push({symbol:s,price:p,score:sc,signal,regime:reg,decision});
+   lastScan.push({symbol:s,price:p,score:sc,signal:sig,regime:reg,decision});
 
    if(sc>bestScore){
      bestScore=sc;
-     best={symbol:s, price:p, prev};
+     best={symbol:s, price:p, prev, vol};
    }
 
    last[s]=p;
@@ -126,20 +136,29 @@ setInterval(async ()=>{
 
  if(activeTrade){
    const p = prices[`NSE:${activeTrade.symbol}`].last_price;
-
    let exit=false, pnl=0;
 
-   if(activeTrade.type==="BUY"){
-     if(p<=activeTrade.entry*(1-CONFIG.SL) || p>=activeTrade.entry*(1+CONFIG.TP)){
-       pnl=(p-activeTrade.entry)*activeTrade.qty;
-       exit=true;
-     }
-   } else {
-     if(p>=activeTrade.entry*(1+CONFIG.SL) || p<=activeTrade.entry*(1-CONFIG.TP)){
-       pnl=(activeTrade.entry-p)*activeTrade.qty;
-       exit=true;
-     }
+   // trailing
+   let profit = activeTrade.type==="BUY" ? (p-activeTrade.entry)/activeTrade.entry : (activeTrade.entry-p)/activeTrade.entry;
+   if(profit>0.01) activeTrade.trailing = activeTrade.entry*1.005;
+   if(profit>0.005) activeTrade.trailing = activeTrade.entry;
+
+   if(activeTrade.trailing){
+     if(activeTrade.type==="BUY" && p<=activeTrade.trailing) exit=true;
+     if(activeTrade.type==="SELL" && p>=activeTrade.trailing) exit=true;
    }
+
+   // SL TP
+   if(activeTrade.type==="BUY"){
+     if(p<=activeTrade.entry*(1-CONFIG.SL) || p>=activeTrade.entry*(1+CONFIG.TP)) exit=true;
+     pnl=(p-activeTrade.entry)*activeTrade.qty;
+   } else {
+     if(p>=activeTrade.entry*(1+CONFIG.SL) || p<=activeTrade.entry*(1-CONFIG.TP)) exit=true;
+     pnl=(activeTrade.entry-p)*activeTrade.qty;
+   }
+
+   // time exit
+   if(Date.now()-activeTrade.start>600000) exit=true;
 
    if(exit){
      await kite.placeOrder("regular",{
@@ -151,35 +170,32 @@ setInterval(async ()=>{
        order_type:"MARKET"
      });
 
-     tradeLog.push({pnl});
      dailyPnL += pnl;
      if(pnl<0) lossStreak++; else lossStreak=0;
-
      activeTrade=null;
    }
-
    return;
  }
 
  if(tradesToday>=CONFIG.MAX_TRADES) return;
  if(!best || bestScore<CONFIG.BASE_SCORE) return;
 
- let signal=getSignal(best.price,best.prev);
- if(!signal) return;
+ let sig=getSignal(best.price,best.prev);
+ if(!sig) return;
 
- let q=qty(best.price);
+ let q=qty(best.price, best.vol);
 
  await kite.placeOrder("regular",{
    exchange:"NSE",
    tradingsymbol:best.symbol,
-   transaction_type:signal,
+   transaction_type:sig,
    quantity:q,
    product:"MIS",
    order_type:"LIMIT",
-   price: signal==="BUY"?best.price*1.001:best.price*0.999
+   price: sig==="BUY"?best.price*1.001:best.price*0.999
  });
 
- activeTrade={symbol:best.symbol,type:signal,entry:best.price,qty:q};
+ activeTrade={symbol:best.symbol,type:sig,entry:best.price,qty:q,start:Date.now()};
  tradesToday++;
 
 },3000);
@@ -191,4 +207,4 @@ setInterval(()=>{
 },86400000);
 
 const PORT=process.env.PORT||3000;
-app.listen(PORT,()=>console.log("8.5 FINAL BOT RUNNING"));
+app.listen(PORT,()=>console.log("9 FINAL BOT RUNNING"));

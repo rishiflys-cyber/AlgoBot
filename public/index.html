@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <body>
-<h2>FINAL 8.5 BOT</h2>
+<h2>FINAL 9 BOT</h2>
 <button onclick="location.href='/login'">Login</button>
 <button onclick="fetch('/start')">Start</button>
 <button onclick="fetch('/kill')">Kill</button>
@@ -9,14 +9,14 @@
 <pre id="d"></pre>
 <script>
 async function load(){
- let r = await fetch('/dashboard');
- let d = await r.json();
- document.getElementById("d").innerText = JSON.stringify(d,null,2);
+ let r=await fetch('/dashboard');
+ let d=await r.json();
+ document.getElementById("d").innerText=JSON.stringify(d,null,2);
 }
 async function loadStatus(){
- let r = await fetch('/status');
- let d = await r.json();
- document.getElementById("d").innerText = JSON.stringify(d,null,2);
+ let r=await fetch('/status');
+ let d=await r.json();
+ document.getElementById("d").innerText=JSON.stringify(d,null,2);
 }
 setInterval(load,3000);
 </script>
