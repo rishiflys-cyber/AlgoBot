@@ -1,1 +1,29 @@
-<html><body><h2>FINAL 9.2 BOT</h2><pre id='d'></pre><script>setInterval(async()=>{let r=await fetch('/status');let d=await r.json();document.getElementById('d').innerText=JSON.stringify(d,null,2)},2000)</script></body></html>
+<!DOCTYPE html>
+<html>
+<body>
+
+<h2>FINAL 9.2 BOT</h2>
+
+<button onclick="location.href='/login'">Login</button>
+<button onclick="fetch('/start')">Start</button>
+<button onclick="fetch('/kill')">Kill</button>
+<button onclick="loadStatus()">Live Scan</button>
+
+<pre id="d"></pre>
+
+<script>
+async function load(){
+ let r = await fetch('/status');
+ let d = await r.json();
+ document.getElementById("d").innerText = JSON.stringify(d,null,2);
+}
+
+async function loadStatus(){
+ load();
+}
+
+setInterval(load,3000);
+</script>
+
+</body>
+</html>
