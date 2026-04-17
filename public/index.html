@@ -2,27 +2,21 @@
 <!DOCTYPE html>
 <html>
 <body>
-<h1>🚀 BOT + PERFORMANCE TRACKER</h1>
+<h2>FINAL BOT</h2>
 <button onclick="location.href='/login'">Login</button>
 <button onclick="fetch('/start')">Start</button>
 <button onclick="fetch('/kill')">Kill</button>
-<button onclick="loadPerf()">Show Performance</button>
-
-<pre id="data"></pre>
-
+<button onclick="perf()">Performance</button>
+<pre id="d"></pre>
 <script>
 async function load(){
- let r = await fetch('/dashboard');
- let d = await r.json();
- document.getElementById("data").innerText = JSON.stringify(d,null,2);
+ let r=await fetch('/dashboard'); let d=await r.json();
+ document.getElementById("d").innerText=JSON.stringify(d,null,2);
 }
-
-async function loadPerf(){
- let r = await fetch('/performance');
- let d = await r.json();
- document.getElementById("data").innerText = JSON.stringify(d,null,2);
+async function perf(){
+ let r=await fetch('/performance'); let d=await r.json();
+ document.getElementById("d").innerText=JSON.stringify(d,null,2);
 }
-
 setInterval(load,2000);
 </script>
 </body>

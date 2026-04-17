@@ -11,9 +11,9 @@ app.use(express.static(path.join(__dirname, "public")));
 const kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
 
 let access_token=null, BOT_ACTIVE=false;
-let tradesToday=0, position=null, entryPrice=0;
-let pnl=0, capital=0;
+let tradesToday=0, capital=0;
 
+let activeTrade = null;
 let tradeLog = [];
 
 const STOCKS = ["RELIANCE","HDFCBANK","ICICIBANK","INFY","TCS"];
@@ -21,7 +21,8 @@ const STOCKS = ["RELIANCE","HDFCBANK","ICICIBANK","INFY","TCS"];
 const CONFIG = {
   MAX_TRADES:2,
   SL:0.01,
-  TP:0.02
+  TP:0.02,
+  RISK_PER_TRADE:0.01
 };
 
 // LOGIN
@@ -48,10 +49,10 @@ app.get("/dashboard", async (req,res)=>{
     capital=m?.equity?.net||0;
   }
  }catch{}
- res.json({capital,BOT_ACTIVE,position,tradesToday,pnl});
+ res.json({capital,BOT_ACTIVE,tradesToday,activeTrade});
 });
 
-// PERFORMANCE METRICS
+// PERFORMANCE
 app.get("/performance",(req,res)=>{
  let wins = tradeLog.filter(t=>t.pnl>0).length;
  let losses = tradeLog.filter(t=>t.pnl<0).length;
@@ -67,26 +68,120 @@ app.get("/performance",(req,res)=>{
  res.json({total,wins,losses,winRate,avgWin,avgLoss,rr,expectancy});
 });
 
-// MOCK TRADE LOG (for now)
-function logTrade(pnlValue){
- tradeLog.push({pnl:pnlValue});
+// PRICE
+async function getPrice(symbol){
+ try{
+  const q = await kite.getLTP([`NSE:${symbol}`]);
+  return q[`NSE:${symbol}`].last_price;
+ }catch{return null;}
 }
 
-// LOOP (simulated trades)
-setInterval(()=>{
- if(!BOT_ACTIVE) return;
- if(tradesToday>=CONFIG.MAX_TRADES) return;
+// POSITION SIZE
+function getQty(price){
+ let risk = capital * CONFIG.RISK_PER_TRADE;
+ let slDist = price * CONFIG.SL;
+ return Math.max(1, Math.floor(risk / slDist));
+}
 
- let randomPnL = Math.random()>0.5 ? 100 : -80;
- pnl += randomPnL;
- logTrade(randomPnL);
+// SIGNAL
+function getSignal(price, prev){
+ if(!prev) return null;
+ let change = (price-prev)/prev;
+ if(change > 0.002) return "BUY";
+ if(change < -0.002) return "SELL";
+ return null;
+}
 
- tradesToday++;
-},5000);
+let lastPrices = {};
+
+// MAIN LOOP
+setInterval(async ()=>{
+ if(!BOT_ACTIVE || !access_token) return;
+
+ // manage active trade
+ if(activeTrade){
+   const price = await getPrice(activeTrade.symbol);
+   if(!price) return;
+
+   let exit = false;
+   let pnl = 0;
+
+   if(activeTrade.type==="BUY"){
+     if(price <= activeTrade.entry*(1-CONFIG.SL)){
+       pnl = (price - activeTrade.entry)*activeTrade.qty;
+       exit = true;
+     }
+     if(price >= activeTrade.entry*(1+CONFIG.TP)){
+       pnl = (price - activeTrade.entry)*activeTrade.qty;
+       exit = true;
+     }
+   }
+
+   if(activeTrade.type==="SELL"){
+     if(price >= activeTrade.entry*(1+CONFIG.SL)){
+       pnl = (activeTrade.entry - price)*activeTrade.qty;
+       exit = true;
+     }
+     if(price <= activeTrade.entry*(1-CONFIG.TP)){
+       pnl = (activeTrade.entry - price)*activeTrade.qty;
+       exit = true;
+     }
+   }
+
+   if(exit){
+     try{
+       await kite.placeOrder("regular",{
+         exchange:"NSE",
+         tradingsymbol:activeTrade.symbol,
+         transaction_type: activeTrade.type==="BUY"?"SELL":"BUY",
+         quantity:activeTrade.qty,
+         product:"MIS",
+         order_type:"MARKET"
+       });
+
+       tradeLog.push({pnl});
+       activeTrade = null;
+
+     }catch(e){}
+   }
+
+   return;
+ }
+
+ // new trade
+ if(tradesToday >= CONFIG.MAX_TRADES) return;
+
+ const symbol = STOCKS[Math.floor(Math.random()*STOCKS.length)];
+ const price = await getPrice(symbol);
+ if(!price) return;
+
+ const prev = lastPrices[symbol];
+ const signal = getSignal(price, prev);
+ lastPrices[symbol] = price;
+
+ if(!signal) return;
+
+ let qty = getQty(price);
+
+ try{
+   await kite.placeOrder("regular",{
+     exchange:"NSE",
+     tradingsymbol:symbol,
+     transaction_type:signal,
+     quantity:qty,
+     product:"MIS",
+     order_type:"MARKET"
+   });
+
+   activeTrade = {symbol, type:signal, entry:price, qty};
+   tradesToday++;
+
+ }catch(e){}
+
+},3000);
 
 // RESET
 setInterval(()=>{tradesToday=0},86400000);
 
-// PORT
 const PORT=process.env.PORT||3000;
-app.listen(PORT,()=>console.log("BOT WITH PERFORMANCE TRACKER RUNNING"));
+app.listen(PORT,()=>console.log("FINAL COMPLETE BOT RUNNING"));
