@@ -10,14 +10,11 @@ app.use(express.static(path.join(__dirname, "public")));
 
 const kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
 
-// ===== STATE =====
 let access_token=null, BOT_ACTIVE=false;
 let activeTrades=[], lastScan=[], lastPrice={};
 let lossStreak=0, dailyPnL=0;
 
-// NEW: capital + feedback
-let capital = 100000; // base capital (can change)
-let tradeHistory = [];
+let capital = 100000;
 let strategyStats = {
   momentum: {win:0, loss:0},
   mean: {win:0, loss:0}
@@ -25,7 +22,6 @@ let strategyStats = {
 
 const STOCKS=["RELIANCE","HDFCBANK","ICICIBANK","INFY","TCS"];
 
-// ===== TIME =====
 function getIST(){
  const now=new Date();
  return new Date(now.toLocaleString("en-US",{timeZone:"Asia/Kolkata"}));
@@ -35,14 +31,12 @@ function mins(){
  return t.getHours()*60+t.getMinutes();
 }
 
-// AUTO
 setInterval(()=>{
  let m=mins();
  if(m===560) BOT_ACTIVE=true;
  if(m===930) BOT_ACTIVE=false;
 },60000);
 
-// LOGIN
 app.get("/login",(req,res)=>res.redirect(kite.getLoginURL()));
 app.get("/redirect",async(req,res)=>{
  const s=await kite.generateSession(req.query.request_token,process.env.KITE_API_SECRET);
@@ -51,20 +45,44 @@ app.get("/redirect",async(req,res)=>{
  res.send("OK");
 });
 
-// CONTROL
 app.get("/start",(req,res)=>{BOT_ACTIVE=true;res.send("STARTED")});
 app.get("/kill",(req,res)=>{BOT_ACTIVE=false;res.send("STOPPED")});
 app.get("/status",(req,res)=>res.json(lastScan));
 
-// ===== ADDITIONS =====
+// ===== NEW PRECISION LAYER =====
 
-// dynamic position sizing (1% capital risk proxy)
-function getQty(price){
- let risk = capital * 0.01;
- return Math.max(1, Math.floor(risk/price));
+// regime detection
+function detectRegime(prices){
+ let volSum=0,count=0;
+ for(let s of STOCKS){
+  let p=prices[`NSE:${s}`].last_price;
+  if(lastPrice[s]){
+    volSum+=Math.abs((p-lastPrice[s])/lastPrice[s]);
+    count++;
+  }
+ }
+ let avg=volSum/count;
+ if(avg>0.002) return "TREND";
+ return "SIDEWAYS";
 }
 
-// bias
+// correlation filter (simple)
+function isDuplicate(symbol){
+ return activeTrades.some(t=>t.symbol===symbol);
+}
+
+// trailing exit
+function trailingExit(trade, price){
+ let pnl = trade.type==="BUY"?(price-trade.entry)/trade.entry:(trade.entry-price)/trade.entry;
+
+ if(pnl>0.015) return true;
+ if(pnl<-0.005) return true;
+
+ return false;
+}
+
+// ===== EXISTING + ENHANCED =====
+
 function getMarketBias(prices){
  let sum=0,count=0;
  for(let s of STOCKS){
@@ -74,14 +92,12 @@ function getMarketBias(prices){
     count++;
   }
  }
- if(count===0) return null;
  let avg=sum/count;
  if(avg>0.0007) return "BULL";
  if(avg<-0.0007) return "BEAR";
  return "SIDEWAYS";
 }
 
-// strategies
 function momentum(p,prev){
  if(!prev) return null;
  let c=(p-prev)/prev;
@@ -97,7 +113,13 @@ function meanReversion(p,prev){
  return null;
 }
 
+function getQty(price){
+ let risk = capital * 0.01;
+ return Math.max(1, Math.floor(risk/price));
+}
+
 // ===== LOOP =====
+
 setInterval(async()=>{
  if(!BOT_ACTIVE||!access_token) return;
  if(lossStreak>=3) return;
@@ -106,6 +128,8 @@ setInterval(async()=>{
  try{
  const prices=await kite.getLTP(STOCKS.map(s=>`NSE:${s}`));
  let bias=getMarketBias(prices);
+ let regime=detectRegime(prices);
+
  lastScan=[];
 
  for(let s of STOCKS){
@@ -114,14 +138,16 @@ setInterval(async()=>{
 
   let m1=momentum(p,prev);
   let m2=meanReversion(p,prev);
-  let final = m1 || m2;
 
-  lastScan.push({symbol:s,price:p,signal:final?.signal,bias,strategy:final?.type});
+  // regime switching
+  let final = regime==="TREND" ? m1 : m2;
 
-  if(final && activeTrades.length<2){
+  lastScan.push({symbol:s,price:p,signal:final?.signal,bias,regime,strategy:final?.type});
+
+  if(final && activeTrades.length<2 && !isDuplicate(s)){
    if((bias==="BULL"&&final.signal==="BUY")||(bias==="BEAR"&&final.signal==="SELL")){
 
-    let qty = getQty(p);
+    let qty=getQty(p);
 
     await kite.placeOrder("regular",{
       exchange:"NSE",
@@ -139,14 +165,12 @@ setInterval(async()=>{
   lastPrice[s]=p;
  }
 
- // EXIT + feedback
+ // exits
  let newTrades=[];
  for(let t of activeTrades){
   let p=prices[`NSE:${t.symbol}`].last_price;
-  let pnl=t.type==="BUY"?(p-t.entry)/t.entry:(t.entry-p)/t.entry;
 
-  if(pnl>0.01 || pnl<-0.005){
-
+  if(trailingExit(t,p)){
     await kite.placeOrder("regular",{
       exchange:"NSE",
       tradingsymbol:t.symbol,
@@ -156,16 +180,13 @@ setInterval(async()=>{
       order_type:"MARKET"
     });
 
-    dailyPnL+=pnl;
-    capital += capital * pnl;
+    let pnl = t.type==="BUY"?(p-t.entry)/t.entry:(t.entry-p)/t.entry;
 
-    // feedback
+    capital += capital * pnl;
+    pnl<0?lossStreak++:lossStreak=0;
+
     if(pnl>0) strategyStats[t.strategy].win++;
     else strategyStats[t.strategy].loss++;
-
-    tradeHistory.push({...t,exit:p,pnl});
-
-    pnl<0?lossStreak++:lossStreak=0;
   } else {
     newTrades.push(t);
   }
@@ -176,6 +197,5 @@ setInterval(async()=>{
 
 },3000);
 
-// ROOT
 app.get("/",(req,res)=>res.sendFile(path.join(__dirname,"public/index.html")));
 app.listen(process.env.PORT||3000);
