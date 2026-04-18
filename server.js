@@ -29,19 +29,13 @@ let access_token = null, BOT_ACTIVE = false;
 let activeTrades = [], lastPrice = {}, lastScan = [];
 let capital = 100000, lossStreak = 0, dailyPnL = 0;
 
-// ===== FIXED CAPITAL SYNC USING POSITIONS =====
+// ===== CAPITAL SYNC =====
 async function syncCapital() {
   try {
     const positions = await kite.getPositions();
-
     let pnl = positions.net.reduce((sum, p) => sum + p.pnl, 0);
-
     let base = capital || 100000;
-
     capital = base + pnl;
-
-    console.log("CAPITAL SYNC:", capital);
-
   } catch (e) {
     console.error("CAPITAL SYNC FAILED:", e.message);
   }
@@ -71,14 +65,14 @@ app.get("/redirect", async (req, res) => {
 // ===== MAIN LOOP =====
 setInterval(async () => {
 
-  if (!BOT_ACTIVE || !access_token || !isMarketOpen()) return;
+  if (!BOT_ACTIVE || !access_token) return;
 
   try {
 
+    // ALWAYS SYNC CAPITAL
     await syncCapital();
 
-    if (!canTrade(dailyPnL, capital, lossStreak)) return;
-
+    // ALWAYS FETCH PRICES
     const prices = await kite.getLTP(CONFIG.STOCKS.map(s => `NSE:${s}`));
     lastScan = [];
 
@@ -88,6 +82,20 @@ setInterval(async () => {
 
       let signal = unifiedSignal(p, prev);
       lastScan.push({ symbol: s, price: p, signal });
+
+      lastPrice[s] = p;
+    }
+
+    // TRADE ONLY DURING MARKET
+    if (!isMarketOpen()) return;
+
+    if (!canTrade(dailyPnL, capital, lossStreak)) return;
+
+    for (let s of CONFIG.STOCKS) {
+      let p = prices[`NSE:${s}`].last_price;
+      let prev = lastPrice[s];
+
+      let signal = unifiedSignal(p, prev);
 
       if (signal && activeTrades.length < CONFIG.MAX_TRADES) {
         let quantity = qty(capital, p, CONFIG);
@@ -107,46 +115,7 @@ setInterval(async () => {
           activeTrades.push({ symbol: s, type: signal, entry: p, qty: quantity });
         }
       }
-
-      lastPrice[s] = p;
     }
-
-    // ===== EXIT =====
-    let newTrades = [];
-
-    for (let t of activeTrades) {
-      let p = prices[`NSE:${t.symbol}`].last_price;
-
-      let pnl = t.type === "BUY"
-        ? (p - t.entry) / t.entry
-        : (t.entry - p) / t.entry;
-
-      let exit = pnl >= CONFIG.TP || pnl <= -CONFIG.SL;
-
-      if (exit) {
-        await safeOrder(() =>
-          kite.placeOrder("regular", {
-            exchange: "NSE",
-            tradingsymbol: t.symbol,
-            transaction_type: t.type === "BUY" ? "SELL" : "BUY",
-            quantity: t.qty,
-            product: "MIS",
-            order_type: "MARKET"
-          })
-        );
-
-        let tradePnL = capital * pnl;
-        dailyPnL += tradePnL;
-
-        if (tradePnL < 0) lossStreak++;
-        else lossStreak = 0;
-
-      } else {
-        newTrades.push(t);
-      }
-    }
-
-    activeTrades = newTrades;
 
   } catch (e) {
     console.error("LOOP ERROR:", e.message);
