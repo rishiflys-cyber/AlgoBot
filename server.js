@@ -29,15 +29,37 @@ let access_token = null, BOT_ACTIVE = false;
 let activeTrades = [], lastPrice = {}, lastScan = [];
 let capital = 100000, lossStreak = 0, dailyPnL = 0;
 
-// ===== CAPITAL SYNC =====
+// ===== FINAL CAPITAL SYNC (ROBUST + TRACE) =====
 async function syncCapital() {
   try {
-    const positions = await kite.getPositions();
-    let pnl = positions.net.reduce((sum, p) => sum + p.pnl, 0);
-    let base = capital || 100000;
-    capital = base + pnl;
+    const margins = await kite.getMargins();
+
+    // FULL TRACE (so we know exactly what Zerodha returns)
+    console.log("=== MARGINS RAW ===");
+    console.log(JSON.stringify(margins, null, 2));
+
+    let value = 0;
+
+    if (margins?.equity?.net > 0) {
+      value = margins.equity.net;
+      console.log("Using equity.net");
+    } else if (margins?.equity?.available?.live_balance > 0) {
+      value = margins.equity.available.live_balance;
+      console.log("Using live_balance");
+    } else if (margins?.equity?.available?.cash > 0) {
+      value = margins.equity.available.cash;
+      console.log("Using cash");
+    } else {
+      console.log("⚠️ No valid capital field found");
+    }
+
+    if (value > 0) {
+      capital = value;
+      console.log("✅ CAPITAL UPDATED:", capital);
+    }
+
   } catch (e) {
-    console.error("CAPITAL SYNC FAILED:", e.message);
+    console.error("❌ CAPITAL SYNC FAILED:", e.message);
   }
 }
 
@@ -69,10 +91,8 @@ setInterval(async () => {
 
   try {
 
-    // ALWAYS SYNC CAPITAL
     await syncCapital();
 
-    // ALWAYS FETCH PRICES
     const prices = await kite.getLTP(CONFIG.STOCKS.map(s => `NSE:${s}`));
     lastScan = [];
 
@@ -86,7 +106,6 @@ setInterval(async () => {
       lastPrice[s] = p;
     }
 
-    // TRADE ONLY DURING MARKET
     if (!isMarketOpen()) return;
 
     if (!canTrade(dailyPnL, capital, lossStreak)) return;
@@ -159,4 +178,6 @@ app.get("/", (req, res) => {
   res.send(`LIVE BOT | Capital: ${capital}`);
 });
 
-app.listen(process.env.PORT || 3000);
+app.listen(process.env.PORT || 3000, () => {
+  console.log("SERVER RUNNING");
+});
