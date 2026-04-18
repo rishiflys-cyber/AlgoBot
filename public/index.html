@@ -1,14 +1,17 @@
-<!DOCTYPE html><html><body>
-<h2>FINAL 8.5 COMPLETE BOT</h2>
+<!DOCTYPE html>
+<html>
+<body>
+<h2>EDGE UPGRADE BOT</h2>
 <button onclick="location.href='/login'">Login</button>
 <button onclick="fetch('/start')">Start</button>
 <button onclick="fetch('/kill')">Kill</button>
 <pre id="d"></pre>
 <script>
-setInterval(async()=>{
- let r=await fetch('/status');
- let d=await r.json();
- document.getElementById('d').innerText=JSON.stringify(d,null,2);
-},2000);
+setInterval(async ()=>{
+  let r = await fetch('/status');
+  let d = await r.json();
+  document.getElementById('d').innerText = JSON.stringify(d,null,2);
+}, 2000);
 </script>
-</body></html>
+</body>
+</html>

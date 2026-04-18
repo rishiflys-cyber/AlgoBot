@@ -10,115 +10,172 @@ app.use(express.static(path.join(__dirname, "public")));
 
 const kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
 
-let access_token=null, BOT_ACTIVE=false, activeTrade=null, lastScan=[];
-let lastPrice={}, lossStreak=0, dailyPnL=0;
+let access_token = null;
+let BOT_ACTIVE = false;
+let activeTrade = null;
+let lastScan = [];
+let lastPrice = {};
+let lossStreak = 0;
+let dailyPnL = 0;
 
-const STOCKS=["RELIANCE","HDFCBANK","ICICIBANK","INFY","TCS"];
+const STOCKS = ["RELIANCE","HDFCBANK","ICICIBANK","INFY","TCS"];
 
-// IST TIME
 function getIST(){
- const now=new Date();
- return new Date(now.toLocaleString("en-US",{timeZone:"Asia/Kolkata"}));
+  const now = new Date();
+  return new Date(now.toLocaleString("en-US",{timeZone:"Asia/Kolkata"}));
 }
 function mins(){
- let t=getIST();
- return t.getHours()*60+t.getMinutes();
+  const t = getIST();
+  return t.getHours()*60 + t.getMinutes();
 }
 
-// AUTO START/STOP
 setInterval(()=>{
- let m=mins();
- if(m===560) BOT_ACTIVE=true;
- if(m===930) BOT_ACTIVE=false;
-},60000);
+  const m = mins();
+  if(m === 560) BOT_ACTIVE = true;
+  if(m === 930) BOT_ACTIVE = false;
+}, 60000);
 
-// LOGIN
 app.get("/login",(req,res)=>res.redirect(kite.getLoginURL()));
-app.get("/redirect",async(req,res)=>{
- const s=await kite.generateSession(req.query.request_token,process.env.KITE_API_SECRET);
- access_token=s.access_token;
- kite.setAccessToken(access_token);
- res.send("OK");
+app.get("/redirect", async (req,res)=>{
+  try{
+    const s = await kite.generateSession(req.query.request_token, process.env.KITE_API_SECRET);
+    access_token = s.access_token;
+    kite.setAccessToken(access_token);
+    res.send("OK");
+  }catch(e){
+    res.send("Login Failed");
+  }
 });
 
-// CONTROL
-app.get("/start",(req,res)=>{BOT_ACTIVE=true;res.send("STARTED")});
-app.get("/kill",(req,res)=>{BOT_ACTIVE=false;res.send("STOPPED")});
+app.get("/start",(req,res)=>{ BOT_ACTIVE = true; res.send("STARTED"); });
+app.get("/kill",(req,res)=>{ BOT_ACTIVE = false; res.send("STOPPED"); });
 app.get("/status",(req,res)=>res.json(lastScan));
 
-// STRATEGY (multi-layer)
-function getSignal(p,prev){
- if(!prev) return null;
- let change=(p-prev)/prev;
-
- if(change>0.0015) return "BUY";
- if(change<-0.0015) return "SELL";
- return null;
+function getMarketBias(prices){
+  let sum = 0, count = 0;
+  for(const s of STOCKS){
+    const key = `NSE:${s}`;
+    const p = prices[key]?.last_price;
+    if(p && lastPrice[s]){
+      sum += (p - lastPrice[s]) / lastPrice[s];
+      count++;
+    }
+  }
+  if(count === 0) return null;
+  const avg = sum / count;
+  if(avg > 0.0005) return "BULL";
+  if(avg < -0.0005) return "BEAR";
+  return "SIDEWAYS";
 }
 
-// MAIN LOOP
-setInterval(async()=>{
- if(!BOT_ACTIVE || !access_token) return;
+function getSignal(p, prev){
+  if(!prev) return null;
+  const change = (p - prev) / prev;
+  if(Math.abs(change) < 0.0012) return null;
+  if(change > 0) return "BUY";
+  if(change < 0) return "SELL";
+  return null;
+}
 
- // risk control
- if(lossStreak>=3) return;
- if(dailyPnL<=-0.02) return;
+setInterval(async ()=>{
+  if(!BOT_ACTIVE || !access_token) return;
 
- try{
- const prices=await kite.getLTP(STOCKS.map(s=>`NSE:${s}`));
- lastScan=[];
- let best=null,bestScore=0;
+  if(lossStreak >= 3) return;
+  if(dailyPnL <= -0.02) return;
 
- for(let s of STOCKS){
-  let p=prices[`NSE:${s}`].last_price;
-  let prev=lastPrice[s];
+  try{
+    const prices = await kite.getLTP(STOCKS.map(s=>`NSE:${s}`));
+    lastScan = [];
 
-  let signal=getSignal(p,prev);
-  let score=prev?Math.abs((p-prev)/prev):0;
+    const bias = getMarketBias(prices);
 
-  lastScan.push({symbol:s,price:p,signal,score});
+    let best = null, bestScore = 0;
 
-  if(signal && score>bestScore){
-    bestScore=score;
-    best={symbol:s,price:p,signal};
-  }
+    for(const s of STOCKS){
+      const key = `NSE:${s}`;
+      const p = prices[key].last_price;
+      const prev = lastPrice[s];
 
-  lastPrice[s]=p;
- }
+      const signal = getSignal(p, prev);
+      const score = prev ? Math.abs((p - prev) / prev) : 0;
 
- // EXIT
- if(activeTrade){
-  let p=prices[`NSE:${activeTrade.symbol}`].last_price;
-  let pnl=0;
+      lastScan.push({symbol:s, price:p, signal, score, bias});
 
-  if(activeTrade.type==="BUY"){
-    pnl=(p-activeTrade.entry)/activeTrade.entry;
-    if(pnl>=0.01 || pnl<=-0.005){
-      await kite.placeOrder("regular",{exchange:"NSE",tradingsymbol:activeTrade.symbol,transaction_type:"SELL",quantity:1,product:"MIS",order_type:"MARKET"});
-      dailyPnL+=pnl;
-      pnl<0?lossStreak++:lossStreak=0;
-      activeTrade=null;
+      if(signal && score > bestScore){
+        bestScore = score;
+        best = {symbol:s, price:p, signal};
+      }
+
+      lastPrice[s] = p;
     }
-  } else {
-    pnl=(activeTrade.entry-p)/activeTrade.entry;
-    if(pnl>=0.01 || pnl<=-0.005){
-      await kite.placeOrder("regular",{exchange:"NSE",tradingsymbol:activeTrade.symbol,transaction_type:"BUY",quantity:1,product:"MIS",order_type:"MARKET"});
-      dailyPnL+=pnl;
-      pnl<0?lossStreak++:lossStreak=0;
-      activeTrade=null;
+
+    if(activeTrade){
+      const key = `NSE:${activeTrade.symbol}`;
+      const p = prices[key].last_price;
+
+      let pnl = 0;
+      if(activeTrade.type === "BUY"){
+        pnl = (p - activeTrade.entry) / activeTrade.entry;
+        if(pnl >= 0.01 || pnl <= -0.005){
+          await kite.placeOrder("regular",{
+            exchange:"NSE",
+            tradingsymbol:activeTrade.symbol,
+            transaction_type:"SELL",
+            quantity:1,
+            product:"MIS",
+            order_type:"MARKET"
+          });
+          dailyPnL += pnl;
+          pnl < 0 ? lossStreak++ : lossStreak = 0;
+          activeTrade = null;
+        }
+      } else {
+        pnl = (activeTrade.entry - p) / activeTrade.entry;
+        if(pnl >= 0.01 || pnl <= -0.005){
+          await kite.placeOrder("regular",{
+            exchange:"NSE",
+            tradingsymbol:activeTrade.symbol,
+            transaction_type:"BUY",
+            quantity:1,
+            product:"MIS",
+            order_type:"MARKET"
+          });
+          dailyPnL += pnl;
+          pnl < 0 ? lossStreak++ : lossStreak = 0;
+          activeTrade = null;
+        }
+      }
+      return;
     }
-  }
-  return;
- }
 
- // ENTRY
- if(best && bestScore>0.0012){
-  await kite.placeOrder("regular",{exchange:"NSE",tradingsymbol:best.symbol,transaction_type:best.signal,quantity:1,product:"MIS",order_type:"MARKET"});
-  activeTrade={symbol:best.symbol,type:best.signal,entry:best.price};
- }
+    if(best && bestScore > 0.0012){
+      if(
+        (bias === "BULL" && best.signal === "BUY") ||
+        (bias === "BEAR" && best.signal === "SELL")
+      ){
+        await kite.placeOrder("regular",{
+          exchange:"NSE",
+          tradingsymbol:best.symbol,
+          transaction_type:best.signal,
+          quantity:1,
+          product:"MIS",
+          order_type:"MARKET"
+        });
 
- }catch(e){}
-},3000);
+        activeTrade = {
+          symbol: best.symbol,
+          type: best.signal,
+          entry: best.price
+        };
+      }
+    }
 
-app.get("/",(req,res)=>res.sendFile(path.join(__dirname,"public/index.html")));
-app.listen(process.env.PORT||3000);
+  }catch(e){}
+
+}, 3000);
+
+app.get("/",(req,res)=>{
+  res.sendFile(path.join(__dirname,"public/index.html"));
+});
+
+app.listen(process.env.PORT || 3000);
