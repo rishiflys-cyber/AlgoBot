@@ -29,19 +29,18 @@ let access_token = null, BOT_ACTIVE = false;
 let activeTrades = [], lastPrice = {}, lastScan = [];
 let capital = 100000, lossStreak = 0, dailyPnL = 0;
 
-// ===== FIXED CAPITAL SYNC =====
+// ===== FIXED CAPITAL SYNC USING POSITIONS =====
 async function syncCapital() {
   try {
-    const margins = await kite.getMargins();
+    const positions = await kite.getPositions();
 
-    let value =
-      margins?.equity?.net ||
-      margins?.equity?.available?.live_balance ||
-      margins?.equity?.available?.cash;
+    let pnl = positions.net.reduce((sum, p) => sum + p.pnl, 0);
 
-    if (value && value > 0) {
-      capital = value;
-    }
+    let base = capital || 100000;
+
+    capital = base + pnl;
+
+    console.log("CAPITAL SYNC:", capital);
 
   } catch (e) {
     console.error("CAPITAL SYNC FAILED:", e.message);
@@ -187,11 +186,8 @@ app.get("/performance", (req, res) => {
   });
 });
 
-// ===== ROOT =====
 app.get("/", (req, res) => {
   res.send(`LIVE BOT | Capital: ${capital}`);
 });
 
-app.listen(process.env.PORT || 3000, () => {
-  console.log("SERVER RUNNING");
-});
+app.listen(process.env.PORT || 3000);
