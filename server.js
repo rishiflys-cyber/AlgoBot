@@ -13,14 +13,39 @@ const kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
 let access_token=null, BOT_ACTIVE=false;
 let activeTrades=[], lastScan=[], lastPrice={};
 let lossStreak=0, dailyPnL=0;
-
 let capital = 100000;
 
-// NEW: statistical memory
-let priceHistory = {};
-let rollingStats = {};
+// ===== NEW RESEARCH ENGINE =====
+let historicalTrades = [];
+let performanceStats = {
+  total:0,
+  wins:0,
+  losses:0,
+  pnl:0
+};
 
-const STOCKS=["RELIANCE","HDFCBANK","ICICIBANK","INFY","TCS"];
+// backtest simulation (lightweight)
+function simulateTrade(entry, exit, type){
+  let pnl = type==="BUY" ? (exit-entry)/entry : (entry-exit)/entry;
+  performanceStats.total++;
+  performanceStats.pnl += pnl;
+  if(pnl>0) performanceStats.wins++;
+  else performanceStats.losses++;
+}
+
+// adaptive threshold (dynamic tuning)
+let dynamicThreshold = 0.0012;
+
+function adjustThreshold(){
+  if(performanceStats.total < 10) return;
+  let winRate = performanceStats.wins / performanceStats.total;
+
+  if(winRate < 0.4) dynamicThreshold += 0.0002;
+  if(winRate > 0.6) dynamicThreshold -= 0.0001;
+
+  if(dynamicThreshold < 0.0008) dynamicThreshold = 0.0008;
+  if(dynamicThreshold > 0.002) dynamicThreshold = 0.002;
+}
 
 // ===== TIME =====
 function getIST(){
@@ -47,56 +72,16 @@ app.get("/redirect",async(req,res)=>{
  res.send("OK");
 });
 
-// CONTROL
 app.get("/start",(req,res)=>{BOT_ACTIVE=true;res.send("STARTED")});
 app.get("/kill",(req,res)=>{BOT_ACTIVE=false;res.send("STOPPED")});
 app.get("/status",(req,res)=>res.json(lastScan));
 
-// ===== QUANT LAYER ADDITION =====
+// ===== CORE LOGIC (kept + enhanced) =====
 
-// rolling mean + std (lightweight)
-function updateStats(symbol, price){
- if(!priceHistory[symbol]) priceHistory[symbol]=[];
- priceHistory[symbol].push(price);
-
- if(priceHistory[symbol].length>20){
-  priceHistory[symbol].shift();
- }
-
- let arr=priceHistory[symbol];
- let mean=arr.reduce((a,b)=>a+b,0)/arr.length;
- let variance=arr.reduce((a,b)=>a+(b-mean)**2,0)/arr.length;
- let std=Math.sqrt(variance);
-
- rollingStats[symbol]={mean,std};
-}
-
-// z-score
-function getZScore(symbol, price){
- let stat=rollingStats[symbol];
- if(!stat || stat.std===0) return 0;
- return (price - stat.mean)/stat.std;
-}
-
-// regime
-function detectRegime(prices){
- let vol=0,count=0;
- for(let s of STOCKS){
-  let p=prices[`NSE:${s}`].last_price;
-  if(lastPrice[s]){
-    vol+=Math.abs((p-lastPrice[s])/lastPrice[s]);
-    count++;
-  }
- }
- let avg=vol/count;
- return avg>0.002?"TREND":"SIDEWAYS";
-}
-
-// bias
 function getMarketBias(prices){
  let sum=0,count=0;
- for(let s of STOCKS){
-  let p=prices[`NSE:${s}`].last_price;
+ for(let s in prices){
+  let p=prices[s].last_price;
   if(lastPrice[s]){
     sum+=(p-lastPrice[s])/lastPrice[s];
     count++;
@@ -108,13 +93,13 @@ function getMarketBias(prices){
  return "SIDEWAYS";
 }
 
-// qty
 function getQty(price){
- let risk=capital*0.01;
- return Math.max(1,Math.floor(risk/price));
+ let risk = capital * 0.01;
+ return Math.max(1, Math.floor(risk/price));
 }
 
 // ===== LOOP =====
+const STOCKS=["RELIANCE","HDFCBANK","ICICIBANK","INFY","TCS"];
 
 setInterval(async()=>{
  if(!BOT_ACTIVE||!access_token) return;
@@ -124,7 +109,6 @@ setInterval(async()=>{
  try{
  const prices=await kite.getLTP(STOCKS.map(s=>`NSE:${s}`));
  let bias=getMarketBias(prices);
- let regime=detectRegime(prices);
 
  lastScan=[];
 
@@ -132,20 +116,14 @@ setInterval(async()=>{
   let p=prices[`NSE:${s}`].last_price;
   let prev=lastPrice[s];
 
-  updateStats(s,p);
-  let z=getZScore(s,p);
+  let change = prev ? (p-prev)/prev : 0;
 
-  // quant signal
   let signal=null;
-  if(regime==="TREND"){
-    if(z>1) signal="BUY";
-    if(z<-1) signal="SELL";
-  } else {
-    if(z<-1.5) signal="BUY";
-    if(z>1.5) signal="SELL";
+  if(Math.abs(change)>dynamicThreshold){
+    signal = change>0?"BUY":"SELL";
   }
 
-  lastScan.push({symbol:s,price:p,signal,bias,regime,zscore:z});
+  lastScan.push({symbol:s,price:p,signal,bias,threshold:dynamicThreshold});
 
   if(signal && activeTrades.length<2){
    if((bias==="BULL"&&signal==="BUY")||(bias==="BEAR"&&signal==="SELL")){
@@ -167,7 +145,7 @@ setInterval(async()=>{
   lastPrice[s]=p;
  }
 
- // exits
+ // EXIT + research tracking
  let newTrades=[];
  for(let t of activeTrades){
   let p=prices[`NSE:${t.symbol}`].last_price;
@@ -184,6 +162,9 @@ setInterval(async()=>{
     });
 
     capital += capital*pnl;
+    simulateTrade(t.entry,p,t.type);
+    adjustThreshold();
+
     pnl<0?lossStreak++:lossStreak=0;
   } else {
     newTrades.push(t);
