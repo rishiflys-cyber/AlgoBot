@@ -14,7 +14,7 @@ app.use(express.static(path.join(__dirname, "public")));
 
 const kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
 
-// ===== TIME CHECK =====
+// ===== TIME =====
 const getIST = () =>
   new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
 
@@ -24,22 +24,25 @@ const isMarketOpen = () => {
   return min >= (9 * 60 + 20) && min <= (14 * 60 + 45);
 };
 
-const isSquareOffTime = () => {
-  const now = getIST();
-  return now.getHours() === 14 && now.getMinutes() >= 45;
-};
-
 // ===== STATE =====
 let access_token = null, BOT_ACTIVE = false;
 let activeTrades = [], lastPrice = {}, lastScan = [];
 let capital = 100000, lossStreak = 0, dailyPnL = 0;
 
-// ===== REAL CAPITAL SYNC (ADDITIVE) =====
+// ===== FIXED CAPITAL SYNC =====
 async function syncCapital() {
   try {
     const margins = await kite.getMargins();
-    const available = margins.equity.available.cash;
-    capital = available; // sync real capital
+
+    let value =
+      margins?.equity?.net ||
+      margins?.equity?.available?.live_balance ||
+      margins?.equity?.available?.cash;
+
+    if (value && value > 0) {
+      capital = value;
+    }
+
   } catch (e) {
     console.error("CAPITAL SYNC FAILED:", e.message);
   }
@@ -57,7 +60,7 @@ app.get("/redirect", async (req, res) => {
     access_token = session.access_token;
     kite.setAccessToken(access_token);
 
-    await syncCapital(); // 🔥 sync immediately
+    await syncCapital();
 
     res.send("LOGIN SUCCESS");
   } catch (e) {
@@ -73,7 +76,7 @@ setInterval(async () => {
 
   try {
 
-    await syncCapital(); // 🔥 keeps capital real-time
+    await syncCapital();
 
     if (!canTrade(dailyPnL, capital, lossStreak)) return;
 
@@ -120,9 +123,6 @@ setInterval(async () => {
         : (t.entry - p) / t.entry;
 
       let exit = pnl >= CONFIG.TP || pnl <= -CONFIG.SL;
-
-      // 🔥 AUTO SQUARE-OFF AT 14:45
-      if (isSquareOffTime()) exit = true;
 
       if (exit) {
         await safeOrder(() =>
@@ -192,4 +192,6 @@ app.get("/", (req, res) => {
   res.send(`LIVE BOT | Capital: ${capital}`);
 });
 
-app.listen(process.env.PORT || 3000);
+app.listen(process.env.PORT || 3000, () => {
+  console.log("SERVER RUNNING");
+});
