@@ -15,13 +15,14 @@ let activeTrades=[], lastScan=[], lastPrice={};
 let lossStreak=0, dailyPnL=0;
 
 let capital = 100000;
-let strategyStats = {
-  momentum: {win:0, loss:0},
-  mean: {win:0, loss:0}
-};
+
+// NEW: statistical memory
+let priceHistory = {};
+let rollingStats = {};
 
 const STOCKS=["RELIANCE","HDFCBANK","ICICIBANK","INFY","TCS"];
 
+// ===== TIME =====
 function getIST(){
  const now=new Date();
  return new Date(now.toLocaleString("en-US",{timeZone:"Asia/Kolkata"}));
@@ -37,6 +38,7 @@ setInterval(()=>{
  if(m===930) BOT_ACTIVE=false;
 },60000);
 
+// LOGIN
 app.get("/login",(req,res)=>res.redirect(kite.getLoginURL()));
 app.get("/redirect",async(req,res)=>{
  const s=await kite.generateSession(req.query.request_token,process.env.KITE_API_SECRET);
@@ -45,44 +47,52 @@ app.get("/redirect",async(req,res)=>{
  res.send("OK");
 });
 
+// CONTROL
 app.get("/start",(req,res)=>{BOT_ACTIVE=true;res.send("STARTED")});
 app.get("/kill",(req,res)=>{BOT_ACTIVE=false;res.send("STOPPED")});
 app.get("/status",(req,res)=>res.json(lastScan));
 
-// ===== NEW PRECISION LAYER =====
+// ===== QUANT LAYER ADDITION =====
 
-// regime detection
+// rolling mean + std (lightweight)
+function updateStats(symbol, price){
+ if(!priceHistory[symbol]) priceHistory[symbol]=[];
+ priceHistory[symbol].push(price);
+
+ if(priceHistory[symbol].length>20){
+  priceHistory[symbol].shift();
+ }
+
+ let arr=priceHistory[symbol];
+ let mean=arr.reduce((a,b)=>a+b,0)/arr.length;
+ let variance=arr.reduce((a,b)=>a+(b-mean)**2,0)/arr.length;
+ let std=Math.sqrt(variance);
+
+ rollingStats[symbol]={mean,std};
+}
+
+// z-score
+function getZScore(symbol, price){
+ let stat=rollingStats[symbol];
+ if(!stat || stat.std===0) return 0;
+ return (price - stat.mean)/stat.std;
+}
+
+// regime
 function detectRegime(prices){
- let volSum=0,count=0;
+ let vol=0,count=0;
  for(let s of STOCKS){
   let p=prices[`NSE:${s}`].last_price;
   if(lastPrice[s]){
-    volSum+=Math.abs((p-lastPrice[s])/lastPrice[s]);
+    vol+=Math.abs((p-lastPrice[s])/lastPrice[s]);
     count++;
   }
  }
- let avg=volSum/count;
- if(avg>0.002) return "TREND";
- return "SIDEWAYS";
+ let avg=vol/count;
+ return avg>0.002?"TREND":"SIDEWAYS";
 }
 
-// correlation filter (simple)
-function isDuplicate(symbol){
- return activeTrades.some(t=>t.symbol===symbol);
-}
-
-// trailing exit
-function trailingExit(trade, price){
- let pnl = trade.type==="BUY"?(price-trade.entry)/trade.entry:(trade.entry-price)/trade.entry;
-
- if(pnl>0.015) return true;
- if(pnl<-0.005) return true;
-
- return false;
-}
-
-// ===== EXISTING + ENHANCED =====
-
+// bias
 function getMarketBias(prices){
  let sum=0,count=0;
  for(let s of STOCKS){
@@ -98,24 +108,10 @@ function getMarketBias(prices){
  return "SIDEWAYS";
 }
 
-function momentum(p,prev){
- if(!prev) return null;
- let c=(p-prev)/prev;
- if(Math.abs(c)<0.0012) return null;
- return {signal:c>0?"BUY":"SELL", type:"momentum"};
-}
-
-function meanReversion(p,prev){
- if(!prev) return null;
- let c=(p-prev)/prev;
- if(c<-0.002) return {signal:"BUY", type:"mean"};
- if(c>0.002) return {signal:"SELL", type:"mean"};
- return null;
-}
-
+// qty
 function getQty(price){
- let risk = capital * 0.01;
- return Math.max(1, Math.floor(risk/price));
+ let risk=capital*0.01;
+ return Math.max(1,Math.floor(risk/price));
 }
 
 // ===== LOOP =====
@@ -136,29 +132,35 @@ setInterval(async()=>{
   let p=prices[`NSE:${s}`].last_price;
   let prev=lastPrice[s];
 
-  let m1=momentum(p,prev);
-  let m2=meanReversion(p,prev);
+  updateStats(s,p);
+  let z=getZScore(s,p);
 
-  // regime switching
-  let final = regime==="TREND" ? m1 : m2;
+  // quant signal
+  let signal=null;
+  if(regime==="TREND"){
+    if(z>1) signal="BUY";
+    if(z<-1) signal="SELL";
+  } else {
+    if(z<-1.5) signal="BUY";
+    if(z>1.5) signal="SELL";
+  }
 
-  lastScan.push({symbol:s,price:p,signal:final?.signal,bias,regime,strategy:final?.type});
+  lastScan.push({symbol:s,price:p,signal,bias,regime,zscore:z});
 
-  if(final && activeTrades.length<2 && !isDuplicate(s)){
-   if((bias==="BULL"&&final.signal==="BUY")||(bias==="BEAR"&&final.signal==="SELL")){
-
+  if(signal && activeTrades.length<2){
+   if((bias==="BULL"&&signal==="BUY")||(bias==="BEAR"&&signal==="SELL")){
     let qty=getQty(p);
 
     await kite.placeOrder("regular",{
       exchange:"NSE",
       tradingsymbol:s,
-      transaction_type:final.signal,
+      transaction_type:signal,
       quantity:qty,
       product:"MIS",
       order_type:"MARKET"
     });
 
-    activeTrades.push({symbol:s,type:final.signal,entry:p,qty,strategy:final.type});
+    activeTrades.push({symbol:s,type:signal,entry:p,qty});
    }
   }
 
@@ -169,8 +171,9 @@ setInterval(async()=>{
  let newTrades=[];
  for(let t of activeTrades){
   let p=prices[`NSE:${t.symbol}`].last_price;
+  let pnl=t.type==="BUY"?(p-t.entry)/t.entry:(t.entry-p)/t.entry;
 
-  if(trailingExit(t,p)){
+  if(pnl>0.015 || pnl<-0.005){
     await kite.placeOrder("regular",{
       exchange:"NSE",
       tradingsymbol:t.symbol,
@@ -180,13 +183,8 @@ setInterval(async()=>{
       order_type:"MARKET"
     });
 
-    let pnl = t.type==="BUY"?(p-t.entry)/t.entry:(t.entry-p)/t.entry;
-
-    capital += capital * pnl;
+    capital += capital*pnl;
     pnl<0?lossStreak++:lossStreak=0;
-
-    if(pnl>0) strategyStats[t.strategy].win++;
-    else strategyStats[t.strategy].loss++;
   } else {
     newTrades.push(t);
   }
