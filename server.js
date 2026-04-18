@@ -15,6 +15,14 @@ let access_token=null, BOT_ACTIVE=false;
 let activeTrades=[], lastScan=[], lastPrice={};
 let lossStreak=0, dailyPnL=0;
 
+// NEW: capital + feedback
+let capital = 100000; // base capital (can change)
+let tradeHistory = [];
+let strategyStats = {
+  momentum: {win:0, loss:0},
+  mean: {win:0, loss:0}
+};
+
 const STOCKS=["RELIANCE","HDFCBANK","ICICIBANK","INFY","TCS"];
 
 // ===== TIME =====
@@ -48,9 +56,15 @@ app.get("/start",(req,res)=>{BOT_ACTIVE=true;res.send("STARTED")});
 app.get("/kill",(req,res)=>{BOT_ACTIVE=false;res.send("STOPPED")});
 app.get("/status",(req,res)=>res.json(lastScan));
 
-// ===== ADDITIONS START =====
+// ===== ADDITIONS =====
 
-// 1. INDEX BIAS (proxy using basket)
+// dynamic position sizing (1% capital risk proxy)
+function getQty(price){
+ let risk = capital * 0.01;
+ return Math.max(1, Math.floor(risk/price));
+}
+
+// bias
 function getMarketBias(prices){
  let sum=0,count=0;
  for(let s of STOCKS){
@@ -67,90 +81,90 @@ function getMarketBias(prices){
  return "SIDEWAYS";
 }
 
-// 2. VOLATILITY (ATR proxy)
-function getVolatility(p,prev){
- if(!prev) return 0;
- return Math.abs((p-prev)/prev);
-}
-
-// 3. MULTI STRATEGY
+// strategies
 function momentum(p,prev){
  if(!prev) return null;
  let c=(p-prev)/prev;
  if(Math.abs(c)<0.0012) return null;
- return c>0?"BUY":"SELL";
+ return {signal:c>0?"BUY":"SELL", type:"momentum"};
 }
 
 function meanReversion(p,prev){
  if(!prev) return null;
  let c=(p-prev)/prev;
- if(c<-0.002) return "BUY";
- if(c>0.002) return "SELL";
+ if(c<-0.002) return {signal:"BUY", type:"mean"};
+ if(c>0.002) return {signal:"SELL", type:"mean"};
  return null;
 }
 
-// ===== MAIN LOOP =====
+// ===== LOOP =====
 setInterval(async()=>{
  if(!BOT_ACTIVE||!access_token) return;
-
  if(lossStreak>=3) return;
  if(dailyPnL<=-0.02) return;
 
  try{
  const prices=await kite.getLTP(STOCKS.map(s=>`NSE:${s}`));
  let bias=getMarketBias(prices);
-
  lastScan=[];
 
  for(let s of STOCKS){
   let p=prices[`NSE:${s}`].last_price;
   let prev=lastPrice[s];
 
-  let vol=getVolatility(p,prev);
-  let sig1=momentum(p,prev);
-  let sig2=meanReversion(p,prev);
+  let m1=momentum(p,prev);
+  let m2=meanReversion(p,prev);
+  let final = m1 || m2;
 
-  let signal=sig1||sig2;
+  lastScan.push({symbol:s,price:p,signal:final?.signal,bias,strategy:final?.type});
 
-  lastScan.push({symbol:s,price:p,signal,bias,vol});
+  if(final && activeTrades.length<2){
+   if((bias==="BULL"&&final.signal==="BUY")||(bias==="BEAR"&&final.signal==="SELL")){
 
-  // ENTRY
-  if(signal && activeTrades.length<2){
-   if(vol>0.001 && ((bias==="BULL"&&signal==="BUY")||(bias==="BEAR"&&signal==="SELL"))){
+    let qty = getQty(p);
 
     await kite.placeOrder("regular",{
       exchange:"NSE",
       tradingsymbol:s,
-      transaction_type:signal,
-      quantity:1,
+      transaction_type:final.signal,
+      quantity:qty,
       product:"MIS",
       order_type:"MARKET"
     });
 
-    activeTrades.push({symbol:s,type:signal,entry:p});
+    activeTrades.push({symbol:s,type:final.signal,entry:p,qty,strategy:final.type});
    }
   }
 
   lastPrice[s]=p;
  }
 
- // EXIT
+ // EXIT + feedback
  let newTrades=[];
  for(let t of activeTrades){
   let p=prices[`NSE:${t.symbol}`].last_price;
   let pnl=t.type==="BUY"?(p-t.entry)/t.entry:(t.entry-p)/t.entry;
 
   if(pnl>0.01 || pnl<-0.005){
+
     await kite.placeOrder("regular",{
       exchange:"NSE",
       tradingsymbol:t.symbol,
       transaction_type:t.type==="BUY"?"SELL":"BUY",
-      quantity:1,
+      quantity:t.qty,
       product:"MIS",
       order_type:"MARKET"
     });
 
     dailyPnL+=pnl;
+    capital += capital * pnl;
+
+    // feedback
+    if(pnl>0) strategyStats[t.strategy].win++;
+    else strategyStats[t.strategy].loss++;
+
+    tradeHistory.push({...t,exit:p,pnl});
+
     pnl<0?lossStreak++:lossStreak=0;
   } else {
     newTrades.push(t);
