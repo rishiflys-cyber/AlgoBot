@@ -31,30 +31,39 @@ let BOT_ACTIVE = false;
 let activeTrades = [], lastPrice = {}, lastScan = [];
 let capital = 100000, lossStreak = 0, dailyPnL = 0;
 
-// ===== CAPITAL SYNC (FINAL FIX) =====
+// ===== REAL PORTFOLIO VALUE =====
 async function syncCapital() {
   try {
     const margins = await kite.getMargins();
+    const holdings = await kite.getHoldings();
+    const positions = await kite.getPositions();
 
-    console.log("=== MARGINS RAW ===");
-    console.log(JSON.stringify(margins, null, 2));
-
-    let value =
+    let cash =
       margins?.equity?.net ||
       margins?.equity?.available?.live_balance ||
-      margins?.equity?.available?.cash;
+      margins?.equity?.available?.cash || 0;
 
-    // 🔥 CRITICAL FIX → DO NOT OVERWRITE WITH ZERO
-    if (!value || value === 0) {
-      console.log("⚠️ Zerodha returned 0 → keeping previous capital:", capital);
-      return;
+    let holdingsValue = holdings.reduce((sum, h) => {
+      return sum + (h.last_price * h.quantity || 0);
+    }, 0);
+
+    let pnl = positions.net.reduce((sum, p) => sum + p.pnl, 0);
+
+    let total = cash + holdingsValue + pnl;
+
+    if (total > 0) {
+      capital = total;
     }
 
-    capital = value;
-    console.log("✅ CAPITAL UPDATED:", capital);
+    console.log("CAPITAL BREAKDOWN:", {
+      cash,
+      holdingsValue,
+      pnl,
+      total: capital
+    });
 
   } catch (e) {
-    console.error("❌ CAPITAL SYNC FAILED:", e.message);
+    console.error("CAPITAL SYNC FAILED:", e.message);
   }
 }
 
@@ -70,30 +79,25 @@ app.get("/redirect", async (req, res) => {
 
     access_token = session.access_token;
     kite.setAccessToken(access_token);
-
-    // persist token
     process.env.ACCESS_TOKEN = access_token;
 
     await syncCapital();
 
     res.send("LOGIN SUCCESS");
   } catch (e) {
-    console.error(e);
     res.send("LOGIN FAILED");
   }
 });
 
-// ===== MAIN LOOP =====
+// ===== LOOP =====
 setInterval(async () => {
 
   if (!BOT_ACTIVE || !access_token) return;
 
   try {
 
-    // ALWAYS SYNC CAPITAL
     await syncCapital();
 
-    // ALWAYS FETCH PRICES
     const prices = await kite.getLTP(CONFIG.STOCKS.map(s => `NSE:${s}`));
     lastScan = [];
 
@@ -107,7 +111,6 @@ setInterval(async () => {
       lastPrice[s] = p;
     }
 
-    // TRADE ONLY DURING MARKET
     if (!isMarketOpen()) return;
 
     if (!canTrade(dailyPnL, capital, lossStreak)) return;
@@ -176,18 +179,4 @@ app.get("/performance", (req, res) => {
   });
 });
 
-// ===== DEBUG =====
-app.get("/debug", (req, res) => {
-  res.json({
-    token: access_token ? "SET" : "NULL",
-    capital
-  });
-});
-
-app.get("/", (req, res) => {
-  res.send(`LIVE BOT | Capital: ${capital}`);
-});
-
-app.listen(process.env.PORT || 3000, () => {
-  console.log("SERVER RUNNING");
-});
+app.listen(process.env.PORT || 3000);
