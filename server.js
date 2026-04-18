@@ -14,24 +14,36 @@ app.use(express.static(path.join(__dirname, "public")));
 
 const kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
 
-// ===== MARKET TIME CHECK =====
+// ===== TIME CHECK =====
+const getIST = () =>
+  new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+
 const isMarketOpen = () => {
-  const now = new Date();
-  const ist = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
-  const h = ist.getHours();
-  const m = ist.getMinutes();
+  const now = getIST();
+  const min = now.getHours() * 60 + now.getMinutes();
+  return min >= (9 * 60 + 20) && min <= (14 * 60 + 45);
+};
 
-  const start = 9 * 60 + 20;
-  const end = 14 * 60 + 45;
-  const current = h * 60 + m;
-
-  return current >= start && current <= end;
+const isSquareOffTime = () => {
+  const now = getIST();
+  return now.getHours() === 14 && now.getMinutes() >= 45;
 };
 
 // ===== STATE =====
 let access_token = null, BOT_ACTIVE = false;
 let activeTrades = [], lastPrice = {}, lastScan = [];
 let capital = 100000, lossStreak = 0, dailyPnL = 0;
+
+// ===== REAL CAPITAL SYNC (ADDITIVE) =====
+async function syncCapital() {
+  try {
+    const margins = await kite.getMargins();
+    const available = margins.equity.available.cash;
+    capital = available; // sync real capital
+  } catch (e) {
+    console.error("CAPITAL SYNC FAILED:", e.message);
+  }
+}
 
 // ===== LOGIN =====
 app.get("/login", (req, res) => res.redirect(kite.getLoginURL()));
@@ -44,6 +56,9 @@ app.get("/redirect", async (req, res) => {
     );
     access_token = session.access_token;
     kite.setAccessToken(access_token);
+
+    await syncCapital(); // 🔥 sync immediately
+
     res.send("LOGIN SUCCESS");
   } catch (e) {
     console.error(e);
@@ -57,6 +72,9 @@ setInterval(async () => {
   if (!BOT_ACTIVE || !access_token || !isMarketOpen()) return;
 
   try {
+
+    await syncCapital(); // 🔥 keeps capital real-time
+
     if (!canTrade(dailyPnL, capital, lossStreak)) return;
 
     const prices = await kite.getLTP(CONFIG.STOCKS.map(s => `NSE:${s}`));
@@ -103,6 +121,9 @@ setInterval(async () => {
 
       let exit = pnl >= CONFIG.TP || pnl <= -CONFIG.SL;
 
+      // 🔥 AUTO SQUARE-OFF AT 14:45
+      if (isSquareOffTime()) exit = true;
+
       if (exit) {
         await safeOrder(() =>
           kite.placeOrder("regular", {
@@ -116,7 +137,6 @@ setInterval(async () => {
         );
 
         let tradePnL = capital * pnl;
-        capital += tradePnL;
         dailyPnL += tradePnL;
 
         if (tradePnL < 0) lossStreak++;
@@ -156,7 +176,7 @@ app.get("/status", (req, res) =>
   })
 );
 
-// ===== PERFORMANCE (FIXED) =====
+// ===== PERFORMANCE =====
 app.get("/performance", (req, res) => {
   res.json({
     capital,
@@ -167,11 +187,9 @@ app.get("/performance", (req, res) => {
   });
 });
 
-// ===== ROOT DEBUG =====
+// ===== ROOT =====
 app.get("/", (req, res) => {
-  res.send(`Bot Running | Capital: ${capital}`);
+  res.send(`LIVE BOT | Capital: ${capital}`);
 });
 
-app.listen(process.env.PORT || 3000, () => {
-  console.log("SERVER RUNNING");
-});
+app.listen(process.env.PORT || 3000);
