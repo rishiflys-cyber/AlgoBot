@@ -1,4 +1,3 @@
-
 const { checkKillSwitch, qty } = require('./risk');
 const CONFIG = require('./config');
 
