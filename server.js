@@ -14,10 +14,26 @@ app.use(express.static(path.join(__dirname, "public")));
 
 const kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
 
+// ===== MARKET TIME CHECK =====
+const isMarketOpen = () => {
+  const now = new Date();
+  const ist = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+  const h = ist.getHours();
+  const m = ist.getMinutes();
+
+  const start = 9 * 60 + 20;
+  const end = 14 * 60 + 45;
+  const current = h * 60 + m;
+
+  return current >= start && current <= end;
+};
+
+// ===== STATE =====
 let access_token = null, BOT_ACTIVE = false;
 let activeTrades = [], lastPrice = {}, lastScan = [];
 let capital = 100000, lossStreak = 0, dailyPnL = 0;
 
+// ===== LOGIN =====
 app.get("/login", (req, res) => res.redirect(kite.getLoginURL()));
 
 app.get("/redirect", async (req, res) => {
@@ -28,14 +44,17 @@ app.get("/redirect", async (req, res) => {
     );
     access_token = session.access_token;
     kite.setAccessToken(access_token);
-    res.send("OK");
-  } catch {
-    res.send("Login Failed");
+    res.send("LOGIN SUCCESS");
+  } catch (e) {
+    console.error(e);
+    res.send("LOGIN FAILED");
   }
 });
 
+// ===== MAIN LOOP =====
 setInterval(async () => {
-  if (!BOT_ACTIVE || !access_token) return;
+
+  if (!BOT_ACTIVE || !access_token || !isMarketOpen()) return;
 
   try {
     if (!canTrade(dailyPnL, capital, lossStreak)) return;
@@ -72,6 +91,7 @@ setInterval(async () => {
       lastPrice[s] = p;
     }
 
+    // ===== EXIT =====
     let newTrades = [];
 
     for (let t of activeTrades) {
@@ -115,10 +135,43 @@ setInterval(async () => {
 
 }, 3000);
 
-app.get("/start", (req, res) => { BOT_ACTIVE = true; res.send("STARTED"); });
-app.get("/kill", (req, res) => { BOT_ACTIVE = false; res.send("STOPPED"); });
+// ===== CONTROL =====
+app.get("/start", (req, res) => {
+  BOT_ACTIVE = true;
+  res.send("BOT STARTED");
+});
+
+app.get("/kill", (req, res) => {
+  BOT_ACTIVE = false;
+  res.send("BOT STOPPED");
+});
+
+// ===== STATUS =====
 app.get("/status", (req, res) =>
-  res.json({ scan: lastScan, capital, activeTrades, dailyPnL })
+  res.json({
+    capital,
+    dailyPnL,
+    activeTrades,
+    scan: lastScan
+  })
 );
 
-app.listen(process.env.PORT || 3000);
+// ===== PERFORMANCE (FIXED) =====
+app.get("/performance", (req, res) => {
+  res.json({
+    capital,
+    dailyPnL,
+    lossStreak,
+    activeTradesCount: activeTrades.length,
+    botActive: BOT_ACTIVE
+  });
+});
+
+// ===== ROOT DEBUG =====
+app.get("/", (req, res) => {
+  res.send(`Bot Running | Capital: ${capital}`);
+});
+
+app.listen(process.env.PORT || 3000, () => {
+  console.log("SERVER RUNNING");
+});
