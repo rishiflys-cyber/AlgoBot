@@ -1,5 +1,5 @@
 <!DOCTYPE html><html><body>
-<h2>QUANT PLATFORM</h2>
+<h2>DATA SCIENCE QUANT PLATFORM</h2>
 <button onclick="fetch('/start')">Start</button>
 <button onclick="fetch('/kill')">Kill</button>
 <pre id="d"></pre>
@@ -7,7 +7,7 @@
 setInterval(async ()=>{
  let r=await fetch('/status');
  let d=await r.json();
- document.getElementById('d').innerText=JSON.stringify(d,null,2);
+ document.getElementById('d').innerText = JSON.stringify(d,null,2);
 },2000);
 </script>
 </body></html>
