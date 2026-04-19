@@ -1,11 +1,17 @@
+
 require("dotenv").config();
 const express = require("express");
 const path = require("path");
 const { KiteConnect } = require("kiteconnect");
 
 const { unifiedSignal } = require("./strategy_unified");
-const { canTrade, qty } = require("./risk_manager");
-const { safeOrder } = require("./execution_safe");
+const { confirmSignal } = require("./signal_confirmation");
+const { canTrade, } = require("./risk_manager");
+const { safeOrderEnhanced } = require("./execution_enhanced");
+const { canTradeSymbol, markTraded } = require("./symbol_cooldown");
+const { getPositionSize } = require("./position_sizing");
+const { markEntry, shouldExit, clear } = require("./time_exit");
+const { isSlippageSafe } = require("./slippage_guard");
 const CONFIG = require("./config");
 
 const app = express();
@@ -14,7 +20,7 @@ app.use(express.static(path.join(__dirname, "public")));
 
 const kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
 
-// ===== TIME (IST) =====
+// TIME
 const getIST = () =>
   new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
 
@@ -28,19 +34,18 @@ const isMarketOpen = () => {
   return min >= (9 * 60 + 20) && min <= (15 * 60 + 20);
 };
 
-// ===== STATE =====
+// STATE
 let access_token = process.env.ACCESS_TOKEN || null;
 let BOT_ACTIVE = false;
 
 let activeTrades = [], lastPrice = {}, lastScan = [];
 let capital = 100000, lossStreak = 0, dailyPnL = 0;
 
-// ===== AUTO SCHEDULE (IST) =====
-// Start at 09:20, Square-off at 15:20
+// AUTO TIMES
 const AUTO_START_MIN = 9 * 60 + 20;
 const AUTO_EXIT_MIN  = 15 * 60 + 20;
 
-// ===== REAL PORTFOLIO VALUE =====
+// CAPITAL
 async function syncCapital() {
   try {
     const margins = await kite.getMargins();
@@ -52,110 +57,63 @@ async function syncCapital() {
       margins?.equity?.available?.live_balance ||
       margins?.equity?.available?.cash || 0;
 
-    let holdingsValue = holdings.reduce((sum, h) => {
-      return sum + ((h.last_price || 0) * (h.quantity || 0));
-    }, 0);
-
+    let holdingsValue = holdings.reduce((sum, h) => sum + ((h.last_price || 0) * (h.quantity || 0)), 0);
     let pnl = (positions?.net || []).reduce((sum, p) => sum + (p.pnl || 0), 0);
 
     let total = cash + holdingsValue + pnl;
-
-    if (total > 0) {
-      capital = total;
-    }
-
-    console.log("CAPITAL BREAKDOWN:", {
-      cash,
-      holdingsValue,
-      pnl,
-      total: capital
-    });
+    if (total > 0) capital = total;
 
   } catch (e) {
     console.error("CAPITAL SYNC FAILED:", e.message);
   }
 }
 
-// ===== LOGIN =====
+// LOGIN
 app.get("/login", (req, res) => res.redirect(kite.getLoginURL()));
 
 app.get("/redirect", async (req, res) => {
   try {
-    const session = await kite.generateSession(
-      req.query.request_token,
-      process.env.KITE_API_SECRET
-    );
-
+    const session = await kite.generateSession(req.query.request_token, process.env.KITE_API_SECRET);
     access_token = session.access_token;
     kite.setAccessToken(access_token);
     process.env.ACCESS_TOKEN = access_token;
 
     await syncCapital();
-
     res.send("LOGIN SUCCESS");
-  } catch (e) {
-    console.error(e);
+  } catch {
     res.send("LOGIN FAILED");
   }
 });
 
-// ===== SQUARE-OFF (uses same safeOrder; no architecture change) =====
+// SQUARE OFF
 async function squareOffAll(pricesMap) {
-  try {
-    if (!activeTrades.length) return;
-
-    console.log("SQUARE-OFF INITIATED");
-
-    for (let t of activeTrades) {
-      const p = pricesMap && pricesMap[`NSE:${t.symbol}`]
-        ? pricesMap[`NSE:${t.symbol}`].last_price
-        : null;
-
-      await safeOrder(() =>
-        kite.placeOrder("regular", {
-          exchange: "NSE",
-          tradingsymbol: t.symbol,
-          transaction_type: t.type === "BUY" ? "SELL" : "BUY",
-          quantity: t.qty,
-          product: "MIS",
-          order_type: "MARKET"
-        })
-      );
-
-      if (p !== null) {
-        const pnl = t.type === "BUY"
-          ? (p - t.entry) / t.entry
-          : (t.entry - p) / t.entry;
-
-        const tradePnL = capital * pnl;
-        dailyPnL += tradePnL;
-        if (tradePnL < 0) lossStreak++;
-        else lossStreak = 0;
-      }
-    }
-
-    activeTrades = [];
-    BOT_ACTIVE = false; // stop after square-off
-    console.log("SQUARE-OFF COMPLETE. BOT STOPPED");
-
-  } catch (e) {
-    console.error("SQUARE-OFF ERROR:", e.message);
+  for (let t of activeTrades) {
+    await safeOrderEnhanced(kite, () =>
+      kite.placeOrder("regular", {
+        exchange: "NSE",
+        tradingsymbol: t.symbol,
+        transaction_type: t.type === "BUY" ? "SELL" : "BUY",
+        quantity: t.qty,
+        product: "MIS",
+        order_type: "MARKET"
+      })
+    );
+    clear(t.symbol);
   }
+  activeTrades = [];
+  BOT_ACTIVE = false;
 }
 
-// ===== LOOP =====
+// LOOP
 setInterval(async () => {
 
-  // Auto start at 09:20 IST
   if (!BOT_ACTIVE && access_token && minutesNow() >= AUTO_START_MIN && minutesNow() < AUTO_EXIT_MIN) {
     BOT_ACTIVE = true;
-    console.log("AUTO START TRIGGERED (IST 09:20)");
   }
 
   if (!access_token) return;
 
   try {
-
     await syncCapital();
 
     const prices = await kite.getLTP(CONFIG.STOCKS.map(s => `NSE:${s}`));
@@ -165,33 +123,56 @@ setInterval(async () => {
       let p = prices[`NSE:${s}`].last_price;
       let prev = lastPrice[s];
 
-      let signal = unifiedSignal(p, prev);
-      lastScan.push({ symbol: s, price: p, signal });
+      let raw = unifiedSignal(p, prev, s);
+      let signal = confirmSignal(s, raw);
 
+      lastScan.push({ symbol: s, price: p, signal });
       lastPrice[s] = p;
     }
 
-    // Auto square-off at 15:20 IST
     if (minutesNow() >= AUTO_EXIT_MIN) {
       await squareOffAll(prices);
       return;
     }
 
-    if (!BOT_ACTIVE) return;
-    if (!isMarketOpen()) return;
-
+    if (!BOT_ACTIVE || !isMarketOpen()) return;
     if (!canTrade(dailyPnL, capital, lossStreak)) return;
 
+    // EXIT LOGIC
+    activeTrades = activeTrades.filter(t => {
+      let p = prices[`NSE:${t.symbol}`].last_price;
+      let pnl = t.type === "BUY" ? (p - t.entry)/t.entry : (t.entry - p)/t.entry;
+
+      if (pnl >= CONFIG.TP || pnl <= -CONFIG.SL || shouldExit(t.symbol)) {
+        safeOrderEnhanced(kite, () =>
+          kite.placeOrder("regular", {
+            exchange: "NSE",
+            tradingsymbol: t.symbol,
+            transaction_type: t.type === "BUY" ? "SELL" : "BUY",
+            quantity: t.qty,
+            product: "MIS",
+            order_type: "MARKET"
+          })
+        );
+        clear(t.symbol);
+        return false;
+      }
+      return true;
+    });
+
+    // ENTRY
     for (let s of CONFIG.STOCKS) {
       let p = prices[`NSE:${s}`].last_price;
       let prev = lastPrice[s];
 
-      let signal = unifiedSignal(p, prev);
+      let raw = unifiedSignal(p, prev, s);
+      let signal = confirmSignal(s, raw);
 
-      if (signal && activeTrades.length < CONFIG.MAX_TRADES) {
-        let quantity = qty(capital, p, CONFIG);
+      if (signal && activeTrades.length < CONFIG.MAX_TRADES && canTradeSymbol(s) && isSlippageSafe(prev, p)) {
 
-        let order = await safeOrder(() =>
+        let quantity = getPositionSize(capital, p, CONFIG);
+
+        let order = await safeOrderEnhanced(kite, () =>
           kite.placeOrder("regular", {
             exchange: "NSE",
             tradingsymbol: s,
@@ -204,6 +185,8 @@ setInterval(async () => {
 
         if (order) {
           activeTrades.push({ symbol: s, type: signal, entry: p, qty: quantity });
+          markTraded(s);
+          markEntry(s);
         }
       }
     }
@@ -214,38 +197,8 @@ setInterval(async () => {
 
 }, 3000);
 
-// ===== CONTROL =====
-app.get("/start", (req, res) => {
-  BOT_ACTIVE = true;
-  res.send("BOT STARTED");
-});
+// ROUTES
+app.get("/status", (req, res) => res.json({ capital, dailyPnL, activeTrades, scan: lastScan }));
+app.get("/performance", (req, res) => res.json({ capital, dailyPnL, lossStreak, activeTradesCount: activeTrades.length, botActive: BOT_ACTIVE }));
 
-app.get("/kill", (req, res) => {
-  BOT_ACTIVE = false;
-  res.send("BOT STOPPED");
-});
-
-// ===== STATUS =====
-app.get("/status", (req, res) =>
-  res.json({
-    capital,
-    dailyPnL,
-    activeTrades,
-    scan: lastScan
-  })
-);
-
-// ===== PERFORMANCE =====
-app.get("/performance", (req, res) => {
-  res.json({
-    capital,
-    dailyPnL,
-    lossStreak,
-    activeTradesCount: activeTrades.length,
-    botActive: BOT_ACTIVE
-  });
-});
-
-app.listen(process.env.PORT || 3000, () => {
-  console.log("SERVER RUNNING");
-});
+app.listen(process.env.PORT || 3000);
