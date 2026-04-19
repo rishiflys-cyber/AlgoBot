@@ -1,5 +1,5 @@
 
-// UPGRADE 8: Trade Quality Filter (NO LOGIC CHANGE, additive)
+// UPGRADE 9: Intraday Drawdown Guard (NO LOGIC CHANGE)
 
 require("dotenv").config();
 const express = require("express");
@@ -7,13 +7,13 @@ const { KiteConnect } = require("kiteconnect");
 
 const { unifiedSignal } = require("./strategy_unified");
 const { confirmSignal } = require("./signal_confirmation");
-const { canTrade } = require("./risk_manager");
 const { safeOrderEnhanced } = require("./execution_enhanced");
 const { canTradeSymbol, markTraded } = require("./symbol_cooldown");
 const { getPositionSize } = require("./position_sizing");
 const { markEntry, shouldExit, clear } = require("./time_exit");
 const { isSlippageSafe } = require("./slippage_guard");
 const { isHighQualityMove } = require("./quality_filter");
+const { isDrawdownSafe, updatePnL } = require("./drawdown_guard");
 
 const CONFIG = require("./config");
 
@@ -22,7 +22,7 @@ const kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
 
 let access_token = process.env.ACCESS_TOKEN || null;
 let activeTrades = [], lastPrice = {};
-let capital = 100000;
+let capital = 100000, dailyPnL = 0;
 
 setInterval(async () => {
 
@@ -31,6 +31,19 @@ setInterval(async () => {
   try {
 
     const prices = await kite.getLTP(CONFIG.STOCKS.map(s => `NSE:${s}`));
+
+    // EXIT
+    activeTrades = activeTrades.filter(t => {
+      let p = prices[`NSE:${t.symbol}`].last_price;
+      let pnl = t.type === "BUY" ? (p - t.entry)/t.entry : (t.entry - p)/t.entry;
+
+      if (shouldExit(t.symbol)) {
+        updatePnL(pnl, capital);
+        clear(t.symbol);
+        return false;
+      }
+      return true;
+    });
 
     for (let s of CONFIG.STOCKS) {
 
@@ -45,6 +58,7 @@ setInterval(async () => {
       if (
         signal &&
         activeTrades.length < CONFIG.MAX_TRADES &&
+        isDrawdownSafe(dailyPnL, capital) &&
         canTradeSymbol(s) &&
         isSlippageSafe(prev, p) &&
         isHighQualityMove(prev, p)
