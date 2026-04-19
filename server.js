@@ -1,6 +1,5 @@
 require("dotenv").config();
 const express = require("express");
-const path = require("path");
 const { KiteConnect } = require("kiteconnect");
 
 const { unifiedSignal } = require("./strategy_unified");
@@ -17,73 +16,214 @@ const { isDrawdownSafe } = require("./drawdown_guard");
 const CONFIG = require("./config/config");
 
 const app = express();
-app.use(express.json());
-
 const kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
 
 let access_token = process.env.ACCESS_TOKEN || null;
-let activeTrades = [], lastPrice = {}, history = {};
-let capital = 100000, dailyPnL = 0;
 
-app.get("/login", (req,res)=>res.redirect(kite.getLoginURL()));
+let BOT_ACTIVE = false;
+let activeTrades = [];
+let lastPrice = {};
+let history = {};
 
-app.get("/redirect", async (req,res)=>{
- try{
-  const s = await kite.generateSession(req.query.request_token, process.env.KITE_API_SECRET);
-  access_token = s.access_token;
-  kite.setAccessToken(access_token);
-  res.send("Login Success");
- }catch(e){res.send(e.message);}
+let capital = 100000;
+let dailyPnL = 0;
+let scanData = [];
+
+// ================= LOGIN =================
+app.get("/login", (req, res) => {
+  res.redirect(kite.getLoginURL());
 });
 
-setInterval(async ()=>{
- if(!access_token) return;
- try{
-  const prices = await kite.getLTP(CONFIG.STOCKS.map(s=>`NSE:${s}`));
+app.get("/redirect", async (req, res) => {
+  try {
+    const session = await kite.generateSession(
+      req.query.request_token,
+      process.env.KITE_API_SECRET
+    );
 
-  activeTrades = activeTrades.filter(t=>{
-    let p = prices[`NSE:${t.symbol}`].last_price;
-    let pnl = t.type==="BUY"?(p-t.entry)/t.entry:(t.entry-p)/t.entry;
-    if(pnl>=CONFIG.TP || pnl<=-CONFIG.SL || shouldExit(t.symbol)){
-      clear(t.symbol);
-      dailyPnL += pnl*capital;
-      return false;
-    }
-    return true;
-  });
+    access_token = session.access_token;
+    kite.setAccessToken(access_token);
 
-  for(let s of CONFIG.STOCKS){
-    let p = prices[`NSE:${s}`].last_price;
-    let prev = lastPrice[s];
-
-    if(!history[s]) history[s]=[];
-    history[s].push(p);
-    if(history[s].length>5) history[s].shift();
-
-    let signal = confirmSignal(s, unifiedSignal(p,prev,s));
-    lastPrice[s]=p;
-
-    if(signal && activeTrades.length<CONFIG.MAX_TRADES &&
-       isDrawdownSafe(dailyPnL,capital) &&
-       canTradeSymbol(s) &&
-       isSlippageSafe(prev,p) &&
-       isHighQualityMove(prev,p) &&
-       isMomentumStrong(history[s])){
-
-        let qty = getPositionSize(capital,p,CONFIG);
-        let order = await safeOrderEnhanced(kite, ()=>kite.placeOrder("regular",{
-          exchange:"NSE",tradingsymbol:s,transaction_type:signal,
-          quantity:qty,product:"MIS",order_type:"MARKET"
-        }));
-
-        if(order){
-          activeTrades.push({symbol:s,type:signal,entry:p,qty});
-          markTraded(s); markEntry(s);
-        }
-    }
+    res.send("Login Success ✅");
+  } catch (e) {
+    res.send("Login Failed ❌ " + e.message);
   }
- }catch(e){console.log(e.message);}
-},3000);
+});
 
-app.get("/",(req,res)=>res.json({capital,dailyPnL,activeTrades}));
-app.listen(process.env.PORT||3000);
+// ================= AUTO TIME CONTROL =================
+function isMarketOpen() {
+  const now = new Date();
+  const ist = new Date(
+    now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
+  );
+
+  const h = ist.getHours();
+  const m = ist.getMinutes();
+
+  const current = h * 60 + m;
+
+  const start = 9 * 60 + 20;   // 9:20
+  const exit = 14 * 60 + 45;   // 2:45
+
+  return current >= start && current < exit;
+}
+
+// ================= CAPITAL =================
+async function syncCapital() {
+  try {
+    const m = await kite.getMargins();
+    const cash =
+      m?.equity?.net ||
+      m?.equity?.available?.cash ||
+      0;
+
+    if (cash > 0) capital = cash;
+  } catch {}
+}
+
+// ================= LOOP =================
+setInterval(async () => {
+
+  if (!access_token) return;
+
+  const marketOpen = isMarketOpen();
+  BOT_ACTIVE = marketOpen;
+
+  try {
+    await syncCapital();
+
+    const prices = await kite.getLTP(
+      CONFIG.STOCKS.map(s => `NSE:${s}`)
+    );
+
+    scanData = [];
+
+    // EXIT + FORCE SQUARE OFF
+    activeTrades = activeTrades.filter(t => {
+
+      let p = prices[`NSE:${t.symbol}`].last_price;
+
+      let pnl =
+        t.type === "BUY"
+          ? (p - t.entry) / t.entry
+          : (t.entry - p) / t.entry;
+
+      const forceExit = !marketOpen;
+
+      if (
+        pnl >= CONFIG.TP ||
+        pnl <= -CONFIG.SL ||
+        shouldExit(t.symbol) ||
+        forceExit
+      ) {
+        safeOrderEnhanced(kite, () =>
+          kite.placeOrder("regular", {
+            exchange: "NSE",
+            tradingsymbol: t.symbol,
+            transaction_type: t.type === "BUY" ? "SELL" : "BUY",
+            quantity: t.qty,
+            product: "MIS",
+            order_type: "MARKET"
+          })
+        );
+
+        clear(t.symbol);
+        dailyPnL += pnl * capital;
+
+        return false;
+      }
+
+      return true;
+    });
+
+    // ENTRY
+    if (!marketOpen) return;
+
+    for (let s of CONFIG.STOCKS) {
+
+      let p = prices[`NSE:${s}`].last_price;
+      let prev = lastPrice[s];
+
+      if (!history[s]) history[s] = [];
+      history[s].push(p);
+      if (history[s].length > 5) history[s].shift();
+
+      let raw = unifiedSignal(p, prev, s);
+      let signal = confirmSignal(s, raw);
+
+      lastPrice[s] = p;
+
+      scanData.push({
+        symbol: s,
+        price: p,
+        signal: signal || null
+      });
+
+      if (
+        signal &&
+        activeTrades.length < CONFIG.MAX_TRADES &&
+        isDrawdownSafe(dailyPnL, capital) &&
+        canTradeSymbol(s) &&
+        isSlippageSafe(prev, p) &&
+        isHighQualityMove(prev, p) &&
+        isMomentumStrong(history[s])
+      ) {
+
+        let qty = getPositionSize(capital, p, CONFIG);
+
+        let order = await safeOrderEnhanced(kite, () =>
+          kite.placeOrder("regular", {
+            exchange: "NSE",
+            tradingsymbol: s,
+            transaction_type: signal,
+            quantity: qty,
+            product: "MIS",
+            order_type: "MARKET"
+          })
+        );
+
+        if (order) {
+          activeTrades.push({
+            symbol: s,
+            type: signal,
+            entry: p,
+            qty
+          });
+
+          markTraded(s);
+          markEntry(s);
+        }
+      }
+    }
+
+  } catch (e) {
+    console.log("ERROR:", e.message);
+  }
+
+}, 3000);
+
+// ================= DASHBOARD =================
+
+// MAIN UI
+app.get("/", (req, res) => {
+  res.json({
+    capital,
+    dailyPnL,
+    activeTrades,
+    scan: scanData
+  });
+});
+
+// JSON DASHBOARD (FIXED)
+app.get("/performance", (req, res) => {
+  res.json({
+    capital,
+    dailyPnL,
+    activeTradesCount: activeTrades.length,
+    botActive: BOT_ACTIVE,
+    scan: scanData
+  });
+});
+
+// ================= START =================
+app.listen(process.env.PORT || 3000);
