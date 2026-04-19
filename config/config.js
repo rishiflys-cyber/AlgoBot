@@ -1,0 +1,1 @@
+module.exports={STOCKS:['RELIANCE','TCS'],TP:0.02,SL:0.01,MAX_TRADES:3}

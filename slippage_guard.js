@@ -1,9 +1,1 @@
-const MAX_SLIPPAGE = 0.002;
-
-function isSlippageSafe(expectedPrice, currentPrice){
-  if(!expectedPrice || !currentPrice) return true;
-  const diff = Math.abs(currentPrice - expectedPrice) / expectedPrice;
-  return diff <= MAX_SLIPPAGE;
-}
-
-module.exports = { isSlippageSafe };
+module.exports.isSlippageSafe=(e,c)=>!e||Math.abs(c-e)/e<=0.002
