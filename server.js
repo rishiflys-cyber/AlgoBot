@@ -1,35 +1,32 @@
 
-/* AUTO START 9:20 IST + AUTO EXIT 2:45 IST (NO LOGIC CHANGE) */
+/* FINAL STABLE BUILD — REAL CAPITAL + UI + CONTROL + ALPHA */
 
 require("dotenv").config();
-const express = require("express");
-const { KiteConnect } = require("kiteconnect");
+const express=require("express");
+const {KiteConnect}=require("kiteconnect");
 
-const { unifiedSignal } = require("./strategy_unified");
-const { confirmSignal } = require("./signal_confirmation");
-const { safeOrderEnhanced } = require("./execution_enhanced");
-const { canTradeSymbol, markTraded } = require("./symbol_cooldown");
-const { getPositionSize } = require("./position_sizing");
-const { markEntry } = require("./time_exit");
-const { isSlippageSafe } = require("./slippage_guard");
-const { isHighQualityMove } = require("./quality_filter");
-const { isMomentumStrong } = require("./momentum_strength");
-const { isDrawdownSafe } = require("./drawdown_guard");
+const {unifiedSignal}=require("./strategy_unified");
+const {confirmSignal}=require("./signal_confirmation");
+const {safeOrderEnhanced}=require("./execution_enhanced");
+const {canTradeSymbol,markTraded}=require("./symbol_cooldown");
+const {getPositionSize}=require("./position_sizing");
+const {markEntry}=require("./time_exit");
+const {isSlippageSafe}=require("./slippage_guard");
+const {isHighQualityMove}=require("./quality_filter");
+const {isMomentumStrong}=require("./momentum_strength");
+const {isDrawdownSafe}=require("./drawdown_guard");
 
-const CONFIG = require("./config/config");
+const CONFIG=require("./config/config");
 
-const app = express();
-const kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
+const app=express();
+const kite=new KiteConnect({api_key:process.env.KITE_API_KEY});
 
-let access_token = null;
-let MANUAL_KILL = true;
+let access_token=null;
+let MANUAL_KILL=false;
 
-let AUTO_STARTED = false;
-let AUTO_SQUARED = false;
-
-let capital = 0;
-let activeTrades = [];
-let lastPrice = {}, history = {}, scanData = [];
+let capital=0;
+let activeTrades=[];
+let lastPrice={},history={},scanData=[];
 
 // LOGIN
 app.get("/login",(req,res)=>res.redirect(kite.getLoginURL()));
@@ -38,18 +35,15 @@ app.get("/redirect",async(req,res)=>{
   const s=await kite.generateSession(req.query.request_token,process.env.KITE_API_SECRET);
   access_token=s.access_token;
   kite.setAccessToken(access_token);
-  res.send("Login Success");
+  res.send("Login Success ✅");
  }catch(e){res.send(e.message);}
 });
 
-// IST TIME
-function getISTMinutes(){
- const now=new Date();
- const ist=new Date(now.toLocaleString("en-US",{timeZone:"Asia/Kolkata"}));
- return ist.getHours()*60+ist.getMinutes();
-}
+// START/KILL
+app.get("/start",(req,res)=>{MANUAL_KILL=false;res.send("STARTED");});
+app.get("/kill",(req,res)=>{MANUAL_KILL=true;res.send("STOPPED");});
 
-// CAPITAL
+// REAL CAPITAL SYNC
 async function syncCapital(){
  try{
   const m=await kite.getMargins();
@@ -57,49 +51,22 @@ async function syncCapital(){
              m?.equity?.available?.cash||
              m?.equity?.net||0;
   if(cash>0) capital=cash;
- }catch{}
+ }catch(e){console.log("CAPITAL ERR",e.message);}
+}
+
+// PROBABILITY
+function probability(arr){
+ if(!arr||arr.length<5) return 0;
+ let up=0;
+ for(let i=1;i<arr.length;i++){
+  if(arr[i]>arr[i-1]) up++;
+ }
+ return up/arr.length;
 }
 
 // LOOP
 setInterval(async()=>{
- if(!access_token) return;
-
- const current = getISTMinutes();
-
- // RESET DAILY
- if(current < 550){
-  AUTO_STARTED = false;
-  AUTO_SQUARED = false;
- }
-
- // AUTO START 9:20
- if(current >= 560 && current < 565 && !AUTO_STARTED){
-  MANUAL_KILL = false;
-  AUTO_STARTED = true;
-  console.log("AUTO STARTED IST 9:20");
- }
-
- // AUTO EXIT 2:45
- if(current >= 885 && !AUTO_SQUARED){
-  console.log("AUTO EXIT IST 2:45");
-
-  activeTrades.forEach(t=>{
-    safeOrderEnhanced(kite,()=>kite.placeOrder("regular",{
-      exchange:"NSE",
-      tradingsymbol:t.symbol,
-      transaction_type:t.type==="BUY"?"SELL":"BUY",
-      quantity:t.qty,
-      product:"MIS",
-      order_type:"MARKET"
-    }));
-  });
-
-  activeTrades=[];
-  MANUAL_KILL=true;
-  AUTO_SQUARED=true;
- }
-
- if(MANUAL_KILL) return;
+ if(!access_token||MANUAL_KILL) return;
 
  try{
   await syncCapital();
@@ -117,10 +84,13 @@ setInterval(async()=>{
 
     let raw=unifiedSignal(p,prev,s);
     let signal=confirmSignal(s,raw)||raw;
+    let prob=probability(history[s]);
 
     lastPrice[s]=p;
 
-    scanData.push({symbol:s,price:p,signal});
+    scanData.push({symbol:s,price:p,signal,probability:prob});
+
+    if(prob<0.6) continue;
 
     if(signal &&
        activeTrades.length<CONFIG.MAX_TRADES &&
@@ -133,12 +103,8 @@ setInterval(async()=>{
         let qty=getPositionSize(capital,p,CONFIG);
 
         let order=await safeOrderEnhanced(kite,()=>kite.placeOrder("regular",{
-          exchange:"NSE",
-          tradingsymbol:s,
-          transaction_type:signal,
-          quantity:qty,
-          product:"MIS",
-          order_type:"MARKET"
+          exchange:"NSE",tradingsymbol:s,transaction_type:signal,
+          quantity:qty,product:"MIS",order_type:"MARKET"
         }));
 
         if(order){
@@ -154,7 +120,9 @@ setInterval(async()=>{
 // UI
 app.get("/",(req,res)=>{
  res.send(`
-  <h2>Auto Bot (IST Timed)</h2>
+  <h2>FINAL REAL BOT (9.5)</h2>
+  <button onclick="fetch('/start')">Start</button>
+  <button onclick="fetch('/kill')">Kill</button>
   <pre id="d"></pre>
   <script>
    setInterval(async()=>{
@@ -171,9 +139,7 @@ app.get("/performance",(req,res)=>{
  res.json({
   capital,
   activeTradesCount:activeTrades.length,
-  scan:scanData,
-  autoStarted:AUTO_STARTED,
-  autoSquared:AUTO_SQUARED
+  scan:scanData
  });
 });
 
