@@ -1,5 +1,4 @@
-
-module.exports={
+module.exports = {
  STOCKS:[
  "RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK",
  "SBIN","ITC","LT","AXISBANK","KOTAKBANK",
