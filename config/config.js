@@ -1,3 +1,4 @@
+
 module.exports = {
  STOCKS:[
  "RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK",
