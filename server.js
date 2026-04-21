@@ -1,4 +1,4 @@
-// FINAL FIXED SYSTEM
+// FINAL REAL TRADING BOT (stable, balanced execution)
 require("dotenv").config();
 const express = require("express");
 const { KiteConnect } = require("kiteconnect");
@@ -9,7 +9,6 @@ const { safeOrderEnhanced } = require("./execution_enhanced");
 const { canTradeSymbol, markTraded } = require("./symbol_cooldown");
 const { getPositionSize } = require("./position_sizing");
 const { markEntry } = require("./time_exit");
-const { isSlippageSafe } = require("./slippage_guard");
 
 const CONFIG = require("./config/config");
 
@@ -82,12 +81,11 @@ setInterval(async ()=>{
 
     scanData.push({symbol:s,price:p,signal,probability:prob});
 
-    if(prob < 0.52) continue;
-
     if(signal &&
        activeTrades.length < CONFIG.MAX_TRADES &&
-       canTradeSymbol(s) &&
-       isSlippageSafe(prev,p)){
+       canTradeSymbol(s)){
+
+        if(prob < 0.45) continue;
 
         let qty = getPositionSize(capital,p,CONFIG);
 
@@ -121,7 +119,7 @@ app.get("/performance",(req,res)=>{
 
 app.get("/",(req,res)=>{
  res.send(`
-  <h2>FINAL BOT</h2>
+  <h2>FINAL REAL BOT</h2>
   <button onclick="fetch('/start')">Start</button>
   <button onclick="fetch('/kill')">Kill</button>
   <pre id="d"></pre>
