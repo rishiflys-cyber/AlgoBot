@@ -1,11 +1,17 @@
-// FINAL DYNAMIC EXECUTION BOT
+
+/* FINAL TRUE EXECUTION FIX
+   - Direct order placement (no silent failure)
+   - Active status correct
+   - Dashboard accurate
+   - Dynamic threshold retained
+*/
+
 require("dotenv").config();
 const express=require("express");
 const {KiteConnect}=require("kiteconnect");
 
 const {unifiedSignal}=require("./strategy_unified");
 const {confirmSignal}=require("./signal_confirmation");
-const {safeOrderEnhanced}=require("./execution_enhanced");
 const {canTradeSymbol,markTraded}=require("./symbol_cooldown");
 const {getPositionSize}=require("./position_sizing");
 const {markEntry}=require("./time_exit");
@@ -23,6 +29,7 @@ let capital=0;
 let activeTrades=[];
 let lastPrice={},history={},scanData=[];
 
+// LOGIN
 app.get("/login",(req,res)=>res.redirect(kite.getLoginURL()));
 
 app.get("/redirect",async(req,res)=>{
@@ -35,9 +42,11 @@ app.get("/redirect",async(req,res)=>{
  }catch(e){res.send(e.message);}
 });
 
+// CONTROL
 app.get("/start",(req,res)=>{MANUAL_KILL=false;BOT_ACTIVE=true;res.send("STARTED");});
 app.get("/kill",(req,res)=>{MANUAL_KILL=true;BOT_ACTIVE=false;res.send("STOPPED");});
 
+// CAPITAL
 async function syncCapital(){
  try{
   const m=await kite.getMargins();
@@ -45,9 +54,12 @@ async function syncCapital(){
              m?.equity?.available?.cash||
              m?.equity?.net||0;
   if(cash>0) capital=cash;
- }catch{}
+ }catch(e){
+  console.log("CAPITAL ERROR:", e.message);
+ }
 }
 
+// PROBABILITY
 function probability(arr){
  if(!arr||arr.length<4) return 0;
  let up=0;
@@ -57,14 +69,16 @@ function probability(arr){
  return up/arr.length;
 }
 
-function dynamicThreshold(vol){
- if(vol>0.7) return 0.55;
- if(vol>0.4) return 0.45;
+// DYNAMIC THRESHOLD
+function dynamicThreshold(p){
+ if(p>0.7) return 0.55;
+ if(p>0.4) return 0.45;
  return 0.35;
 }
 
+// LOOP
 setInterval(async()=>{
- if(!access_token||MANUAL_KILL) return;
+ if(!access_token || MANUAL_KILL) return;
 
  try{
   await syncCapital();
@@ -72,6 +86,7 @@ setInterval(async()=>{
   scanData=[];
 
   for(let s of CONFIG.STOCKS){
+
     let p=prices[`NSE:${s}`].last_price;
     let prev=lastPrice[s];
 
@@ -92,6 +107,7 @@ setInterval(async()=>{
     if(prob < thr) continue;
 
     if(signal && activeTrades.length<CONFIG.MAX_TRADES && canTradeSymbol(s)){
+
       let qty=getPositionSize(capital,p,CONFIG);
 
       if(qty<=0){
@@ -99,30 +115,36 @@ setInterval(async()=>{
         continue;
       }
 
-      console.log("TRY TRADE:",s,signal,qty,prob,thr);
+      console.log("TRY ORDER:", s, signal, qty, prob, thr);
 
-      let order=await safeOrderEnhanced(kite,()=>kite.placeOrder("regular",{
-        exchange:"NSE",
-        tradingsymbol:s,
-        transaction_type:signal,
-        quantity:qty,
-        product:"MIS",
-        order_type:"MARKET"
-      }));
+      try{
+        let order=await kite.placeOrder("regular",{
+          exchange:"NSE",
+          tradingsymbol:s,
+          transaction_type:signal,
+          quantity:qty,
+          product:"MIS",
+          order_type:"MARKET"
+        });
 
-      console.log("ORDER:",order);
+        console.log("ORDER SUCCESS:", order);
 
-      if(order){
         activeTrades.push({symbol:s,type:signal,entry:p,qty});
         markTraded(s);
         markEntry(s);
+
+      }catch(err){
+        console.log("ORDER FAILED:", err.message);
       }
     }
   }
 
- }catch(e){console.log(e.message);}
+ }catch(e){
+  console.log("LOOP ERROR:", e.message);
+ }
 },3000);
 
+// DASHBOARD
 app.get("/performance",(req,res)=>{
  res.json({
   capital,
@@ -132,9 +154,10 @@ app.get("/performance",(req,res)=>{
  });
 });
 
+// UI
 app.get("/",(req,res)=>{
  res.send(`
-  <h2>DYNAMIC BOT FINAL</h2>
+  <h2>FINAL TRUE BOT</h2>
   <button onclick="fetch('/start')">Start</button>
   <button onclick="fetch('/kill')">Kill</button>
   <pre id="d"></pre>
