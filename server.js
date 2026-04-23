@@ -1,11 +1,4 @@
-
-/* FINAL TRUE EXECUTION FIX
-   - Direct order placement (no silent failure)
-   - Active status correct
-   - Dashboard accurate
-   - Dynamic threshold retained
-*/
-
+// FINAL UNLOCKED BOT
 require("dotenv").config();
 const express=require("express");
 const {KiteConnect}=require("kiteconnect");
@@ -29,7 +22,6 @@ let capital=0;
 let activeTrades=[];
 let lastPrice={},history={},scanData=[];
 
-// LOGIN
 app.get("/login",(req,res)=>res.redirect(kite.getLoginURL()));
 
 app.get("/redirect",async(req,res)=>{
@@ -42,11 +34,9 @@ app.get("/redirect",async(req,res)=>{
  }catch(e){res.send(e.message);}
 });
 
-// CONTROL
 app.get("/start",(req,res)=>{MANUAL_KILL=false;BOT_ACTIVE=true;res.send("STARTED");});
 app.get("/kill",(req,res)=>{MANUAL_KILL=true;BOT_ACTIVE=false;res.send("STOPPED");});
 
-// CAPITAL
 async function syncCapital(){
  try{
   const m=await kite.getMargins();
@@ -54,12 +44,9 @@ async function syncCapital(){
              m?.equity?.available?.cash||
              m?.equity?.net||0;
   if(cash>0) capital=cash;
- }catch(e){
-  console.log("CAPITAL ERROR:", e.message);
- }
+ }catch(e){console.log(e.message);}
 }
 
-// PROBABILITY
 function probability(arr){
  if(!arr||arr.length<4) return 0;
  let up=0;
@@ -69,14 +56,12 @@ function probability(arr){
  return up/arr.length;
 }
 
-// DYNAMIC THRESHOLD
 function dynamicThreshold(p){
  if(p>0.7) return 0.55;
  if(p>0.4) return 0.45;
  return 0.35;
 }
 
-// LOOP
 setInterval(async()=>{
  if(!access_token || MANUAL_KILL) return;
 
@@ -95,10 +80,12 @@ setInterval(async()=>{
     if(history[s].length>6) history[s].shift();
 
     let raw=unifiedSignal(p,prev,s);
-    let signal=confirmSignal(s,raw)||raw;
-
+    let confirmed=confirmSignal(s,raw);
     let prob=probability(history[s]);
     let thr=dynamicThreshold(prob);
+
+    let signal=confirmed;
+    if(!signal && raw && prob>=thr){ signal=raw; }
 
     lastPrice[s]=p;
 
@@ -109,13 +96,9 @@ setInterval(async()=>{
     if(signal && activeTrades.length<CONFIG.MAX_TRADES && canTradeSymbol(s)){
 
       let qty=getPositionSize(capital,p,CONFIG);
+      if(qty<=0){ console.log("QTY BLOCK:",s); continue; }
 
-      if(qty<=0){
-        console.log("QTY BLOCK:",s);
-        continue;
-      }
-
-      console.log("TRY ORDER:", s, signal, qty, prob, thr);
+      console.log("TRY ORDER:", s, signal, qty);
 
       try{
         let order=await kite.placeOrder("regular",{
@@ -128,7 +111,6 @@ setInterval(async()=>{
         });
 
         console.log("ORDER SUCCESS:", order);
-
         activeTrades.push({symbol:s,type:signal,entry:p,qty});
         markTraded(s);
         markEntry(s);
@@ -139,12 +121,10 @@ setInterval(async()=>{
     }
   }
 
- }catch(e){
-  console.log("LOOP ERROR:", e.message);
- }
+ }catch(e){ console.log("LOOP ERROR:", e.message); }
+
 },3000);
 
-// DASHBOARD
 app.get("/performance",(req,res)=>{
  res.json({
   capital,
@@ -154,10 +134,8 @@ app.get("/performance",(req,res)=>{
  });
 });
 
-// UI
 app.get("/",(req,res)=>{
- res.send(`
-  <h2>FINAL TRUE BOT</h2>
+ res.send(`<h2>FINAL UNLOCKED BOT</h2>
   <button onclick="fetch('/start')">Start</button>
   <button onclick="fetch('/kill')">Kill</button>
   <pre id="d"></pre>
@@ -167,8 +145,7 @@ app.get("/",(req,res)=>{
     let d=await r.json();
     document.getElementById('d').innerText=JSON.stringify(d,null,2);
    },2000);
-  </script>
- `);
+  </script>`);
 });
 
 app.listen(process.env.PORT||3000);
