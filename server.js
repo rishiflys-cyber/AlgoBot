@@ -15,6 +15,7 @@ let pnl=0;
 let activeTrades=[];
 let closedTrades=[];
 let history={};
+let volumeHistory={};
 let scanOutput=[];
 
 // 🔥 DYNAMIC COMPOUNDING
@@ -26,54 +27,16 @@ function dynamicQty(price){
 
 const STOCKS = ["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","ITC","LT","AXISBANK","KOTAKBANK"];
 
-// 🔥 INDEX TREND (NIFTY)
-let indexHistory = [];
+// 🔥 INDEX TREND
+let indexHistory=[];
 function getIndexTrend(){
-  if(indexHistory.length < 5) return "UNKNOWN";
-  let up = 0;
-  for(let i=1;i<indexHistory.length;i++){
-    if(indexHistory[i] > indexHistory[i-1]) up++;
-  }
-  return up >= 3 ? "UP" : "DOWN";
-}
-
-// UI
-app.get("/",(req,res)=>{
- res.send(`
- <h2>FINAL BOT (INDEX + VOLUME + COMPOUNDING)</h2>
- <button onclick="location.href='/login'">Login</button>
- <button onclick="fetch('/start')">Start</button>
- <button onclick="fetch('/kill')">Kill</button>
- <pre id="data"></pre>
- <script>
- setInterval(async()=>{
-  let r=await fetch('/performance');
-  let d=await r.json();
-  document.getElementById('data').innerText=JSON.stringify(d,null,2);
- },2000);
- </script>
- `);
-});
-
-app.get("/login",(req,res)=>res.redirect(kite.getLoginURL()));
-
-app.get("/redirect",async(req,res)=>{
- try{
-  const s=await kite.generateSession(req.query.request_token,process.env.KITE_API_SECRET);
-  access_token=s.access_token;
-  kite.setAccessToken(access_token);
-  BOT_ACTIVE=true;
-
-  let ipRes=await axios.get("https://api.ipify.org?format=json");
-  res.send("Login Success. IP: "+ipRes.data.ip);
-
- }catch(e){
-  res.send("Login failed");
+ if(indexHistory.length<5) return "UNKNOWN";
+ let up=0;
+ for(let i=1;i<indexHistory.length;i++){
+  if(indexHistory[i]>indexHistory[i-1]) up++;
  }
-});
-
-app.get("/start",(req,res)=>{BOT_ACTIVE=true;res.send("STARTED");});
-app.get("/kill",(req,res)=>{BOT_ACTIVE=false;res.send("STOPPED");});
+ return up>=3?"UP":"DOWN";
+}
 
 // CAPITAL
 async function updateCapital(){
@@ -91,54 +54,73 @@ function prob(a){
  return up/a.length;
 }
 
+// 🔥 VOLUME BREAKOUT CHECK
+function volumeBreakout(symbol, currentVol){
+ if(!volumeHistory[symbol]) return false;
+
+ let avg = volumeHistory[symbol].reduce((a,b)=>a+b,0) / volumeHistory[symbol].length;
+ return currentVol > avg * 1.5; // 50% spike
+}
+
 setInterval(async()=>{
  if(!access_token||!BOT_ACTIVE) return;
 
  try{
   await updateCapital();
 
-  // 🔥 FETCH INDEX
-  let indexData = await kite.getLTP(["NSE:NIFTY 50"]);
-  let indexPrice = indexData["NSE:NIFTY 50"]?.last_price;
-  if(indexPrice){
-    indexHistory.push(indexPrice);
-    if(indexHistory.length > 6) indexHistory.shift();
+  let indexData=await kite.getLTP(["NSE:NIFTY 50"]);
+  let idx=indexData["NSE:NIFTY 50"]?.last_price;
+  if(idx){
+    indexHistory.push(idx);
+    if(indexHistory.length>6) indexHistory.shift();
   }
 
-  let indexTrend = getIndexTrend();
+  let indexTrend=getIndexTrend();
 
-  const prices=await kite.getLTP(STOCKS.map(s=>"NSE:"+s));
+  const quotes=await kite.getQuote(STOCKS.map(s=>"NSE:"+s));
 
   scanOutput=[];
 
   for(let s of STOCKS){
 
-    let p=prices["NSE:"+s]?.last_price;
-    if(!p) continue;
+    let data=quotes["NSE:"+s];
+    if(!data) continue;
 
+    let price=data.last_price;
+    let vol=data.volume;
+
+    // store volume history
+    if(!volumeHistory[s]) volumeHistory[s]=[];
+    volumeHistory[s].push(vol);
+    if(volumeHistory[s].length>6) volumeHistory[s].shift();
+
+    // price history
     if(!history[s]) history[s]=[];
-    history[s].push(p);
+    history[s].push(price);
     if(history[s].length>6) history[s].shift();
 
     let pr=prob(history[s]);
+    let volBreak=volumeBreakout(s, vol);
 
     let signal=null;
     let reason="No edge";
 
-    // 🔥 INDEX FILTER
-    if(indexTrend === "UP" && pr>=0.5){
-      signal="BUY";
-      reason="Momentum + Index Up";
-    }
-    else if(indexTrend === "DOWN" && pr>=0.5){
-      signal="SELL";
-      reason="Momentum + Index Down";
+    if(volBreak && pr>=0.5){
+      if(indexTrend==="UP"){
+        signal="BUY";
+        reason="Momentum + Index UP + Volume Breakout";
+      } else if(indexTrend==="DOWN"){
+        signal="SELL";
+        reason="Momentum + Index DOWN + Volume Breakout";
+      }
     }
 
     scanOutput.push({
       symbol:s,
-      price:p,
+      price,
       probability:pr,
+      volume:vol,
+      volumeBreakout:volBreak,
       indexTrend,
       signal,
       reason
@@ -146,7 +128,7 @@ setInterval(async()=>{
 
     if(signal && !activeTrades.find(t=>t.symbol===s) && activeTrades.length<5){
 
-      let qty = dynamicQty(p);
+      let qty=dynamicQty(price);
 
       await kite.placeOrder("regular",{
         exchange:"NSE",
@@ -157,7 +139,7 @@ setInterval(async()=>{
         order_type:"MARKET"
       });
 
-      activeTrades.push({symbol:s,entry:p,type:signal,qty});
+      activeTrades.push({symbol:s,entry:price,type:signal,qty});
     }
   }
 
@@ -165,7 +147,7 @@ setInterval(async()=>{
   let remaining=[];
 
   for(let t of activeTrades){
-    let cp=prices["NSE:"+t.symbol]?.last_price;
+    let cp=quotes["NSE:"+t.symbol]?.last_price;
     if(!cp) continue;
 
     let profit=t.type==="BUY"?(cp-t.entry):(t.entry-cp);
@@ -189,21 +171,37 @@ setInterval(async()=>{
 
   activeTrades=remaining;
 
-  let realized = closedTrades.reduce((a,b)=>a+b,0);
-  pnl = realized + unreal;
+  let realized=closedTrades.reduce((a,b)=>a+b,0);
+  pnl=realized+unreal;
 
  }catch(e){}
 },3000);
 
+app.get("/",(req,res)=>{
+ res.send("<h2>FINAL BOT (INDEX + VOLUME BREAKOUT)</h2>");
+});
+
+app.get("/login",(req,res)=>res.redirect(kite.getLoginURL()));
+
+app.get("/redirect",async(req,res)=>{
+ try{
+  const s=await kite.generateSession(req.query.request_token,process.env.KITE_API_SECRET);
+  access_token=s.access_token;
+  kite.setAccessToken(access_token);
+  BOT_ACTIVE=true;
+  res.send("Login Success");
+ }catch(e){
+  res.send("Login failed");
+ }
+});
+
 app.get("/performance",(req,res)=>{
  res.json({
-  botActive: BOT_ACTIVE,
+  botActive:BOT_ACTIVE,
   capital,
   pnl,
-  activeTradesCount: activeTrades.length,
-  scan: scanOutput,
-  activeTrades,
-  closedTrades
+  activeTradesCount:activeTrades.length,
+  scan:scanOutput
  });
 });
 
