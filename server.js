@@ -20,7 +20,7 @@ const STOCKS=["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","ITC","LT","
 
 app.get("/",(req,res)=>{
  res.send(`
- <h2>FINAL PROFIT BOT (ENTRY + EXIT)</h2>
+ <h2>FINAL MONEY MAGNET BOT</h2>
  <button onclick="fetch('/start')">Start</button>
  <button onclick="fetch('/kill')">Kill</button>
  <pre id="data"></pre>
@@ -126,7 +126,7 @@ setInterval(async()=>{
     }
   }
 
-  // EXIT LOGIC
+  // EXIT LOGIC (OPTIMIZED)
   let remainingTrades=[];
   for(let t of activeTrades){
 
@@ -135,8 +135,8 @@ setInterval(async()=>{
 
     let profit = t.type==="BUY"?(cp-t.entry):(t.entry-cp);
 
-    // TARGET
-    if(profit > t.entry*0.002){
+    // 🔥 PROFIT TARGET (0.35%)
+    if(profit > t.entry*0.0035){
         console.log("BOOK PROFIT:", t.symbol);
 
         await kite.placeOrder("regular",{
@@ -150,7 +150,7 @@ setInterval(async()=>{
         });
 
     }
-    // STOP LOSS
+    // 🔥 STOP LOSS (0.2%)
     else if(profit < -t.entry*0.002){
         console.log("STOP LOSS:", t.symbol);
 
