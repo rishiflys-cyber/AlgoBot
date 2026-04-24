@@ -1,3 +1,4 @@
+
 require("dotenv").config();
 const express = require("express");
 const { KiteConnect } = require("kiteconnect");
@@ -18,19 +19,7 @@ let scanData = [];
 const STOCKS = ["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","ITC","LT","AXISBANK","KOTAKBANK"];
 
 app.get("/", (req,res)=>{
- res.send(`
- <h2>FINAL STABLE BOT</h2>
- <button onclick="fetch('/start')">Start</button>
- <button onclick="fetch('/kill')">Kill</button>
- <pre id="d"></pre>
- <script>
- setInterval(async()=>{
-  let r = await fetch('/performance');
-  let d = await r.json();
-  document.getElementById('d').innerText = JSON.stringify(d,null,2);
- },2000);
- </script>
- `);
+ res.send("BOT LIVE - CHECK /performance");
 });
 
 app.get("/login",(req,res)=>res.redirect(kite.getLoginURL()));
@@ -86,6 +75,7 @@ setInterval(async()=>{
   scanData=[];
 
   for(let s of STOCKS){
+
     let p = prices[`NSE:${s}`].last_price;
 
     if(!history[s]) history[s]=[];
@@ -95,17 +85,28 @@ setInterval(async()=>{
     let prob = probability(history[s]);
 
     let signal = null;
+
+    // STRONG ENTRY
     if(prob>=0.45 && history[s].length>=2){
       let last = history[s].at(-1);
       let prev = history[s].at(-2);
       signal = last>prev ? "BUY" : "SELL";
     }
 
-    let mode = prob>=0.45 ? "STRONG" : prob>=0.40 ? "EARLY" : "NONE";
+    // CONTROLLED AGGRESSION (NEW)
+    if(!signal && prob>=0.30 && history[s].length>=2){
+      let last = history[s].at(-1);
+      let prev = history[s].at(-2);
+      signal = last>prev ? "BUY" : "SELL";
+    }
+
+    let mode = prob>=0.45 ? "STRONG" : prob>=0.30 ? "EARLY" : "NONE";
 
     scanData.push({symbol:s,price:p,signal,probability:prob,mode});
 
-    if(signal && activeTrades.length<5){
+    console.log("EXEC CHECK:", s, signal, prob);
+
+    if(signal && activeTrades.length<3){
       try{
         await kite.placeOrder("regular",{
           exchange:"NSE",
@@ -117,7 +118,9 @@ setInterval(async()=>{
         });
 
         activeTrades.push({symbol:s,entry:p,type:signal});
-      }catch(e){}
+      }catch(e){
+        console.log("ORDER FAILED:", e.message);
+      }
     }
   }
 
@@ -128,7 +131,9 @@ setInterval(async()=>{
     else pnl += (t.entry - current);
   }
 
- }catch(e){}
+ }catch(e){
+  console.log("LOOP ERROR:", e.message);
+ }
 
 },3000);
 
