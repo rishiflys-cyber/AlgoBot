@@ -16,24 +16,19 @@ let activeTrades=[];
 let history={};
 let scanData=[];
 
-// trimmed but scalable list
-const STOCKS = [
-"RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","ITC","LT","AXISBANK","KOTAKBANK",
-"HCLTECH","WIPRO","BHARTIARTL","HINDUNILVR","TATASTEEL","JSWSTEEL","MARUTI","BAJFINANCE"
-];
+const STOCKS=["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","ITC","LT","AXISBANK","KOTAKBANK"];
 
-// UI FIXED
 app.get("/",(req,res)=>{
  res.send(`
- <h2>FINAL 200+ BOT DASHBOARD</h2>
+ <h2>FINAL BOT DASHBOARD</h2>
  <button onclick="fetch('/start')">Start</button>
  <button onclick="fetch('/kill')">Kill</button>
  <pre id="data"></pre>
  <script>
  setInterval(async()=>{
-  let r = await fetch('/performance');
-  let d = await r.json();
-  document.getElementById('data').innerText = JSON.stringify(d,null,2);
+  let r=await fetch('/performance');
+  let d=await r.json();
+  document.getElementById('data').innerText=JSON.stringify(d,null,2);
  },2000);
  </script>
  `);
@@ -81,21 +76,35 @@ setInterval(async()=>{
 
     if(!history[s]) history[s]=[];
     history[s].push(p);
-    if(history[s].length>5) history[s].shift();
+    if(history[s].length>6) history[s].shift();
 
     let pr=prob(history[s]);
 
     let signal=null;
+    let mode="NONE";
+
+    // CORE
     if(pr>=0.5){
       let last=history[s].at(-1);
       let prev=history[s].at(-2);
       signal = last>prev?"BUY":"SELL";
+      mode="CORE";
     }
 
-    scanData.push({symbol:s,price:p,signal,probability:pr});
+    // SCOUT
+    else if(pr>=0.35){
+      let last=history[s].at(-1);
+      let prev=history[s].at(-2);
+      signal = last>prev?"BUY":"SELL";
+      mode="SCOUT";
+    }
+
+    scanData.push({symbol:s,price:p,signal,probability:pr,mode});
 
     if(signal && activeTrades.length<3){
-      let qty=Math.max(1,Math.floor(capital/(p*25)));
+
+      let baseQty=Math.max(1,Math.floor(capital/(p*25)));
+      let qty = mode==="CORE" ? baseQty : Math.max(1,Math.floor(baseQty*0.4));
 
       try{
         await kite.placeOrder("regular",{
@@ -106,6 +115,7 @@ setInterval(async()=>{
           product:"MIS",
           order_type:"MARKET"
         });
+
         activeTrades.push({symbol:s,entry:p,type:signal});
       }catch(e){}
     }
