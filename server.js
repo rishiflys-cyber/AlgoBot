@@ -15,13 +15,12 @@ let pnl=0;
 let activeTrades=[];
 let history={};
 let scanData=[];
-let cycleCount=0;
 
 const STOCKS=["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","ITC","LT"];
 
 app.get("/",(req,res)=>{
  res.send(`
- <h2>MONEY MAGNET BOT</h2>
+ <h2>PROFIT EDGE BOT</h2>
  <button onclick="fetch('/start')">Start</button>
  <button onclick="fetch('/kill')">Kill</button>
  <pre id="d"></pre>
@@ -56,17 +55,21 @@ async function updateCapital(){
 }
 
 function prob(a){
- if(a.length<4) return 0;
+ if(a.length<5) return 0;
  let up=0;
  for(let i=1;i<a.length;i++){ if(a[i]>a[i-1]) up++; }
  return up/a.length;
+}
+
+function momentum(a){
+ if(a.length<3) return 0;
+ return a[a.length-1] - a[0];
 }
 
 setInterval(async()=>{
  if(!access_token||MANUAL_KILL) return;
 
  try{
-  cycleCount++;
   await updateCapital();
   const prices=await kite.getLTP(STOCKS.map(s=>`NSE:${s}`));
   scanData=[];
@@ -77,69 +80,46 @@ setInterval(async()=>{
 
     if(!history[s]) history[s]=[];
     history[s].push(p);
-    if(history[s].length>6) history[s].shift();
+    if(history[s].length>8) history[s].shift();
 
     let pr=prob(history[s]);
+    let mom=momentum(history[s]);
 
     let signal=null;
 
-    if(pr>=0.45 && history[s].length>=2){
-      let l=history[s].at(-1);
-      let pr2=history[s].at(-2);
-      signal = l>pr2?"BUY":"SELL";
+    // PROFIT EDGE CONDITION (trend + momentum)
+    if(pr>=0.55 && Math.abs(mom) > (p*0.002)){
+        signal = mom>0 ? "BUY":"SELL";
     }
 
-    if(!signal && pr>=0.30 && history[s].length>=2){
-      let l=history[s].at(-1);
-      let pr2=history[s].at(-2);
-      signal = l>pr2?"BUY":"SELL";
-    }
-
-    let mode= pr>=0.45?"STRONG":pr>=0.30?"EARLY":"NONE";
+    let mode = pr>=0.55 ? "STRONG" : pr>=0.45 ? "WATCH" : "NONE";
 
     scanData.push({symbol:s,price:p,signal,probability:pr,mode});
 
-    let qty = Math.max(1, Math.floor(capital/(p*20)));
+    console.log("EDGE:",s,signal,pr,mom);
 
-    if(signal && activeTrades.length<3){
-      console.log("TRY:",s,signal,qty);
+    // EXECUTION
+    if(signal && activeTrades.length<2){
 
-      try{
-        await kite.placeOrder("regular",{
-          exchange:"NSE",
-          tradingsymbol:s,
-          transaction_type:signal,
-          quantity:qty,
-          product:"MIS",
-          order_type:"MARKET"
-        });
+        let qty = Math.max(1, Math.floor(capital/(p*25))); // safer sizing
 
-        activeTrades.push({symbol:s,entry:p,type:signal});
-      }catch(e){
-        console.log("FAIL:",e.message);
-      }
+        try{
+            await kite.placeOrder("regular",{
+                exchange:"NSE",
+                tradingsymbol:s,
+                transaction_type:signal,
+                quantity:qty,
+                product:"MIS",
+                order_type:"MARKET"
+            });
+
+            activeTrades.push({symbol:s,entry:p,type:signal});
+            console.log("ORDER SUCCESS", s);
+
+        }catch(e){
+            console.log("ORDER FAIL", e.message);
+        }
     }
-  }
-
-  // 🔥 FORCE TRADE IF NONE AFTER SOME TIME
-  if(activeTrades.length===0 && cycleCount>10){
-    let s=STOCKS[0];
-    let p=prices[`NSE:${s}`].last_price;
-
-    console.log("FORCED TRADE:",s);
-
-    try{
-      await kite.placeOrder("regular",{
-        exchange:"NSE",
-        tradingsymbol:s,
-        transaction_type:"BUY",
-        quantity:1,
-        product:"MIS",
-        order_type:"MARKET"
-      });
-
-      activeTrades.push({symbol:s,entry:p,type:"BUY"});
-    }catch(e){}
   }
 
   pnl=0;
