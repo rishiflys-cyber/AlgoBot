@@ -20,7 +20,7 @@ const STOCKS=["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","ITC","LT","
 
 app.get("/",(req,res)=>{
  res.send(`
- <h2>FINAL MONEY MAGNET BOT</h2>
+ <h2>FINAL BOT (TREND FILTER)</h2>
  <button onclick="fetch('/start')">Start</button>
  <button onclick="fetch('/kill')">Kill</button>
  <pre id="data"></pre>
@@ -51,9 +51,7 @@ async function updateCapital(){
  try{
   let m=await kite.getMargins();
   capital=m?.equity?.available?.live_balance||m?.equity?.available?.cash||m?.equity?.net||0;
- }catch(e){
-  console.log("CAPITAL ERROR:", e.message);
- }
+ }catch(e){}
 }
 
 function prob(a){
@@ -71,7 +69,6 @@ setInterval(async()=>{
   const prices=await kite.getLTP(STOCKS.map(s=>`NSE:${s}`));
   scanData=[];
 
-  // ENTRY
   for(let s of STOCKS){
 
     let p=prices[`NSE:${s}`]?.last_price;
@@ -82,16 +79,17 @@ setInterval(async()=>{
     if(history[s].length>6) history[s].shift();
 
     let pr=prob(history[s]);
+    let trend = history[s][history[s].length-1] > history[s][0];
 
     let signal=null;
     let mode="NONE";
 
-    if(pr>=0.5){
+    if(pr>=0.5 && trend){
       let last=history[s].at(-1);
       let prev=history[s].at(-2);
       signal = last>prev?"BUY":"SELL";
       mode="CORE";
-    } else if(pr>=0.35){
+    } else if(pr>=0.35 && trend){
       let last=history[s].at(-1);
       let prev=history[s].at(-2);
       signal = last>prev?"BUY":"SELL";
@@ -106,8 +104,6 @@ setInterval(async()=>{
       let qty = mode==="CORE" ? baseQty : Math.max(1,Math.floor(baseQty*0.4));
 
       try{
-        console.log("TRY ENTRY:", s, signal, qty);
-
         await kite.placeOrder("regular",{
             exchange:"NSE",
             tradingsymbol:s,
@@ -120,25 +116,18 @@ setInterval(async()=>{
 
         activeTrades.push({symbol:s,entry:p,type:signal,qty});
 
-      }catch(e){
-        console.log("ENTRY FAILED:", e.message);
-      }
+      }catch(e){}
     }
   }
 
-  // EXIT LOGIC (OPTIMIZED)
   let remainingTrades=[];
   for(let t of activeTrades){
-
     let cp=prices[`NSE:${t.symbol}`]?.last_price;
     if(!cp) continue;
 
     let profit = t.type==="BUY"?(cp-t.entry):(t.entry-cp);
 
-    // 🔥 PROFIT TARGET (0.35%)
-    if(profit > t.entry*0.0035){
-        console.log("BOOK PROFIT:", t.symbol);
-
+    if(profit > t.entry*0.0035 || profit < -t.entry*0.002){
         await kite.placeOrder("regular",{
             exchange:"NSE",
             tradingsymbol:t.symbol,
@@ -148,39 +137,14 @@ setInterval(async()=>{
             order_type:"MARKET",
             market_protection:2
         });
-
-    }
-    // 🔥 STOP LOSS (0.2%)
-    else if(profit < -t.entry*0.002){
-        console.log("STOP LOSS:", t.symbol);
-
-        await kite.placeOrder("regular",{
-            exchange:"NSE",
-            tradingsymbol:t.symbol,
-            transaction_type: t.type==="BUY"?"SELL":"BUY",
-            quantity:t.qty,
-            product:"MIS",
-            order_type:"MARKET",
-            market_protection:2
-        });
-
-    }
-    else{
+    } else {
         remainingTrades.push(t);
     }
   }
 
   activeTrades = remainingTrades;
 
-  pnl=0;
-  for(let t of activeTrades){
-    let cp=prices[`NSE:${t.symbol}`].last_price;
-    pnl += t.type==="BUY"?(cp-t.entry):(t.entry-cp);
-  }
-
- }catch(e){
-  console.log("LOOP ERROR:", e.message);
- }
+ }catch(e){}
 
 },3000);
 
