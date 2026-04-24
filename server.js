@@ -17,16 +17,32 @@ let closedTrades=[];
 let history={};
 let scanOutput=[];
 
-// 🔥 STOCK LIST (expandable to 200+)
+// 🔥 STOCK LIST
 const STOCKS = [
 "RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","ITC","LT","AXISBANK","KOTAKBANK",
 "HCLTECH","WIPRO","ULTRACEMCO","BAJFINANCE","MARUTI","ASIANPAINT","TITAN","SUNPHARMA"
 ];
 
-// UI DASHBOARD
+// 🔥 MARKET REGIME FUNCTION
+function getMarketRegime(hist){
+ if(hist.length<6) return "UNKNOWN";
+
+ let moves=0;
+ for(let i=1;i<hist.length;i++){
+  moves += Math.abs(hist[i]-hist[i-1]);
+ }
+
+ let avgMove = moves/hist.length;
+
+ if(avgMove < 0.5) return "SIDEWAYS";
+ if(avgMove < 1.5) return "NORMAL";
+ return "VOLATILE";
+}
+
+// UI
 app.get("/",(req,res)=>{
  res.send(`
- <h2>PROFIT OPTIMIZED BOT</h2>
+ <h2>FINAL REGIME BOT</h2>
  <button onclick="location.href='/login'">Login</button>
  <button onclick="fetch('/start')">Start</button>
  <button onclick="fetch('/kill')">Kill</button>
@@ -52,7 +68,6 @@ app.get("/redirect",async(req,res)=>{
   BOT_ACTIVE=true;
 
   let ipRes=await axios.get("https://api.ipify.org?format=json");
-
   res.send("Login Success. IP: "+ipRes.data.ip);
 
  }catch(e){
@@ -60,7 +75,6 @@ app.get("/redirect",async(req,res)=>{
  }
 });
 
-// CONTROL
 app.get("/start",(req,res)=>{BOT_ACTIVE=true;res.send("STARTED");});
 app.get("/kill",(req,res)=>{BOT_ACTIVE=false;res.send("STOPPED");});
 
@@ -97,26 +111,32 @@ setInterval(async()=>{
 
     if(!history[s]) history[s]=[];
     history[s].push(p);
-    if(history[s].length>6) history[s].shift();
+    if(history[s].length>8) history[s].shift();
 
     let pr=prob(history[s]);
+    let regime=getMarketRegime(history[s]);
 
     let signal=null;
     let reason="No edge";
 
-    if(pr>=0.5){
-      signal = history[s].at(-1)>history[s].at(-2)?"BUY":"SELL";
-      reason="Strong momentum";
+    // 🔥 REGIME FILTER
+    if(regime==="SIDEWAYS"){
+      reason="Skipped (sideways market)";
     }
-    else if(pr>=0.3){
+    else if(pr>=0.5){
       signal = history[s].at(-1)>history[s].at(-2)?"BUY":"SELL";
-      reason="Weak momentum (scout)";
+      reason="Strong momentum + valid regime";
+    }
+    else if(pr>=0.3 && regime==="VOLATILE"){
+      signal = history[s].at(-1)>history[s].at(-2)?"BUY":"SELL";
+      reason="Volatile scout entry";
     }
 
     scanOutput.push({
       symbol:s,
       price:p,
       probability:pr,
+      regime,
       signal,
       reason
     });
@@ -180,10 +200,8 @@ app.get("/performance",(req,res)=>{
   botActive: BOT_ACTIVE,
   capital,
   pnl,
-  scannedStocks: STOCKS.length,
   activeTradesCount: activeTrades.length,
-  scan: scanOutput,
-  activeTrades
+  scan: scanOutput
  });
 });
 
