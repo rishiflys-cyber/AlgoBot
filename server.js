@@ -20,7 +20,7 @@ const STOCKS=["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","ITC","LT","
 
 app.get("/",(req,res)=>{
  res.send(`
- <h2>FINAL BOT (TREND FILTER)</h2>
+ <h2>FINAL BALANCED BOT</h2>
  <button onclick="fetch('/start')">Start</button>
  <button onclick="fetch('/kill')">Kill</button>
  <pre id="data"></pre>
@@ -84,15 +84,14 @@ setInterval(async()=>{
     let signal=null;
     let mode="NONE";
 
+    // CORE
     if(pr>=0.5 && trend){
-      let last=history[s].at(-1);
-      let prev=history[s].at(-2);
-      signal = last>prev?"BUY":"SELL";
+      signal = history[s].at(-1) > history[s].at(-2) ? "BUY":"SELL";
       mode="CORE";
-    } else if(pr>=0.35 && trend){
-      let last=history[s].at(-1);
-      let prev=history[s].at(-2);
-      signal = last>prev?"BUY":"SELL";
+    }
+    // RELAXED SCOUT
+    else if(pr>=0.35){
+      signal = history[s].at(-1) > history[s].at(-2) ? "BUY":"SELL";
       mode="SCOUT";
     }
 
