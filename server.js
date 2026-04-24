@@ -20,7 +20,7 @@ const STOCKS=["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","ITC","LT","
 
 app.get("/",(req,res)=>{
  res.send(`
- <h2>FINAL BOT DASHBOARD</h2>
+ <h2>FINAL BOT DASHBOARD (EXECUTION FIX)</h2>
  <button onclick="fetch('/start')">Start</button>
  <button onclick="fetch('/kill')">Kill</button>
  <pre id="data"></pre>
@@ -51,7 +51,9 @@ async function updateCapital(){
  try{
   let m=await kite.getMargins();
   capital=m?.equity?.available?.live_balance||m?.equity?.available?.cash||m?.equity?.net||0;
- }catch(e){}
+ }catch(e){
+  console.log("CAPITAL ERROR:", e.message);
+ }
 }
 
 function prob(a){
@@ -62,7 +64,7 @@ function prob(a){
 }
 
 setInterval(async()=>{
- if(!access_token||MANUAL_KILL) return;
+ if(!access_token || MANUAL_KILL) return;
 
  try{
   await updateCapital();
@@ -83,16 +85,12 @@ setInterval(async()=>{
     let signal=null;
     let mode="NONE";
 
-    // CORE
     if(pr>=0.5){
       let last=history[s].at(-1);
       let prev=history[s].at(-2);
       signal = last>prev?"BUY":"SELL";
       mode="CORE";
-    }
-
-    // SCOUT
-    else if(pr>=0.35){
+    } else if(pr>=0.35){
       let last=history[s].at(-1);
       let prev=history[s].at(-2);
       signal = last>prev?"BUY":"SELL";
@@ -103,11 +101,18 @@ setInterval(async()=>{
 
     if(signal && activeTrades.length<3){
 
+      if(!access_token){
+        console.log("NO ACCESS TOKEN");
+        return;
+      }
+
       let baseQty=Math.max(1,Math.floor(capital/(p*25)));
       let qty = mode==="CORE" ? baseQty : Math.max(1,Math.floor(baseQty*0.4));
 
       try{
-        await kite.placeOrder("regular",{
+        console.log("TRY ORDER:", s, signal, qty);
+
+        let order = await kite.placeOrder("regular",{
           exchange:"NSE",
           tradingsymbol:s,
           transaction_type:signal,
@@ -116,8 +121,13 @@ setInterval(async()=>{
           order_type:"MARKET"
         });
 
+        console.log("ORDER SUCCESS:", order);
+
         activeTrades.push({symbol:s,entry:p,type:signal});
-      }catch(e){}
+
+      }catch(e){
+        console.log("ORDER FAILED:", e.message);
+      }
     }
   }
 
@@ -127,7 +137,9 @@ setInterval(async()=>{
     pnl += t.type==="BUY"?(cp-t.entry):(t.entry-cp);
   }
 
- }catch(e){}
+ }catch(e){
+  console.log("LOOP ERROR:", e.message);
+ }
 
 },3000);
 
