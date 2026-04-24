@@ -20,7 +20,7 @@ const STOCKS=["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","ITC","LT","
 
 app.get("/",(req,res)=>{
  res.send(`
- <h2>FINAL BOT (MARKET PROTECTION FIX)</h2>
+ <h2>FINAL PROFIT BOT (ENTRY + EXIT)</h2>
  <button onclick="fetch('/start')">Start</button>
  <button onclick="fetch('/kill')">Kill</button>
  <pre id="data"></pre>
@@ -71,6 +71,7 @@ setInterval(async()=>{
   const prices=await kite.getLTP(STOCKS.map(s=>`NSE:${s}`));
   scanData=[];
 
+  // ENTRY
   for(let s of STOCKS){
 
     let p=prices[`NSE:${s}`]?.last_price;
@@ -105,27 +106,71 @@ setInterval(async()=>{
       let qty = mode==="CORE" ? baseQty : Math.max(1,Math.floor(baseQty*0.4));
 
       try{
-        console.log("TRY ORDER:", s, signal, qty);
+        console.log("TRY ENTRY:", s, signal, qty);
 
-        let order = await kite.placeOrder("regular",{
+        await kite.placeOrder("regular",{
             exchange:"NSE",
             tradingsymbol:s,
             transaction_type:signal,
             quantity:qty,
             product:"MIS",
             order_type:"MARKET",
-            market_protection: 2   // FIX APPLIED
+            market_protection:2
         });
 
-        console.log("ORDER SUCCESS:", order);
-
-        activeTrades.push({symbol:s,entry:p,type:signal});
+        activeTrades.push({symbol:s,entry:p,type:signal,qty});
 
       }catch(e){
-        console.log("ORDER FAILED:", e.message);
+        console.log("ENTRY FAILED:", e.message);
       }
     }
   }
+
+  // EXIT LOGIC
+  let remainingTrades=[];
+  for(let t of activeTrades){
+
+    let cp=prices[`NSE:${t.symbol}`]?.last_price;
+    if(!cp) continue;
+
+    let profit = t.type==="BUY"?(cp-t.entry):(t.entry-cp);
+
+    // TARGET
+    if(profit > t.entry*0.002){
+        console.log("BOOK PROFIT:", t.symbol);
+
+        await kite.placeOrder("regular",{
+            exchange:"NSE",
+            tradingsymbol:t.symbol,
+            transaction_type: t.type==="BUY"?"SELL":"BUY",
+            quantity:t.qty,
+            product:"MIS",
+            order_type:"MARKET",
+            market_protection:2
+        });
+
+    }
+    // STOP LOSS
+    else if(profit < -t.entry*0.002){
+        console.log("STOP LOSS:", t.symbol);
+
+        await kite.placeOrder("regular",{
+            exchange:"NSE",
+            tradingsymbol:t.symbol,
+            transaction_type: t.type==="BUY"?"SELL":"BUY",
+            quantity:t.qty,
+            product:"MIS",
+            order_type:"MARKET",
+            market_protection:2
+        });
+
+    }
+    else{
+        remainingTrades.push(t);
+    }
+  }
+
+  activeTrades = remainingTrades;
 
   pnl=0;
   for(let t of activeTrades){
