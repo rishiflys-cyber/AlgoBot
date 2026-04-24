@@ -20,16 +20,27 @@ let scanOutput=[];
 // 🔥 DYNAMIC COMPOUNDING
 function dynamicQty(price){
   if(!capital) return 1;
-  let risk = capital * 0.02; // 2%
+  let risk = capital * 0.02;
   return Math.max(1, Math.floor(risk / price));
 }
 
 const STOCKS = ["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","ITC","LT","AXISBANK","KOTAKBANK"];
 
-// UI DASHBOARD RESTORED
+// 🔥 INDEX TREND (NIFTY)
+let indexHistory = [];
+function getIndexTrend(){
+  if(indexHistory.length < 5) return "UNKNOWN";
+  let up = 0;
+  for(let i=1;i<indexHistory.length;i++){
+    if(indexHistory[i] > indexHistory[i-1]) up++;
+  }
+  return up >= 3 ? "UP" : "DOWN";
+}
+
+// UI
 app.get("/",(req,res)=>{
  res.send(`
- <h2>FINAL BOT (DASHBOARD + COMPOUNDING)</h2>
+ <h2>FINAL BOT (INDEX + VOLUME + COMPOUNDING)</h2>
  <button onclick="location.href='/login'">Login</button>
  <button onclick="fetch('/start')">Start</button>
  <button onclick="fetch('/kill')">Kill</button>
@@ -85,6 +96,17 @@ setInterval(async()=>{
 
  try{
   await updateCapital();
+
+  // 🔥 FETCH INDEX
+  let indexData = await kite.getLTP(["NSE:NIFTY 50"]);
+  let indexPrice = indexData["NSE:NIFTY 50"]?.last_price;
+  if(indexPrice){
+    indexHistory.push(indexPrice);
+    if(indexHistory.length > 6) indexHistory.shift();
+  }
+
+  let indexTrend = getIndexTrend();
+
   const prices=await kite.getLTP(STOCKS.map(s=>"NSE:"+s));
 
   scanOutput=[];
@@ -103,12 +125,24 @@ setInterval(async()=>{
     let signal=null;
     let reason="No edge";
 
-    if(pr>=0.5){
-      signal = history[s].at(-1)>history[s].at(-2)?"BUY":"SELL";
-      reason="Strong momentum";
+    // 🔥 INDEX FILTER
+    if(indexTrend === "UP" && pr>=0.5){
+      signal="BUY";
+      reason="Momentum + Index Up";
+    }
+    else if(indexTrend === "DOWN" && pr>=0.5){
+      signal="SELL";
+      reason="Momentum + Index Down";
     }
 
-    scanOutput.push({symbol:s,price:p,probability:pr,signal,reason});
+    scanOutput.push({
+      symbol:s,
+      price:p,
+      probability:pr,
+      indexTrend,
+      signal,
+      reason
+    });
 
     if(signal && !activeTrades.find(t=>t.symbol===s) && activeTrades.length<5){
 
