@@ -30,20 +30,19 @@ app.get("/redirect",async(req,res)=>{
   access_token=s.access_token;
   kite.setAccessToken(access_token);
   BOT_ACTIVE=true;
-  console.log("LOGIN SUCCESS");
   res.send("Login Success");
- }catch(e){console.log(e.message);res.send(e.message);}
+ }catch(e){res.send(e.message);}
 });
 
-app.get("/start",(req,res)=>{MANUAL_KILL=false;BOT_ACTIVE=true;console.log("BOT STARTED");res.send("STARTED");});
-app.get("/kill",(req,res)=>{MANUAL_KILL=true;BOT_ACTIVE=false;console.log("BOT STOPPED");res.send("STOPPED");});
+app.get("/start",(req,res)=>{MANUAL_KILL=false;BOT_ACTIVE=true;res.send("STARTED");});
+app.get("/kill",(req,res)=>{MANUAL_KILL=true;BOT_ACTIVE=false;res.send("STOPPED");});
 
 async function syncCapital(){
  try{
   const m=await kite.getMargins();
   const cash=m?.equity?.available?.live_balance||m?.equity?.available?.cash||m?.equity?.net||0;
   if(cash>0) capital=cash;
- }catch(e){console.log("CAPITAL ERROR",e.message);}
+ }catch(e){}
 }
 
 function probability(arr){
@@ -66,17 +65,23 @@ setInterval(async()=>{
   for(let s of CONFIG.STOCKS){
 
     let p=prices[`NSE:${s}`].last_price;
-    let prev=lastPrice[s];
 
     if(!history[s]) history[s]=[];
     history[s].push(p);
     if(history[s].length>6) history[s].shift();
 
-    let raw=unifiedSignal(p,prev,s);
+    let raw=unifiedSignal(p,lastPrice[s],s);
     let confirmed=confirmSignal(s,raw);
     let prob=probability(history[s]);
 
     let signal = confirmed || raw;
+
+    if (!signal && prob >= 0.45 && history[s].length >= 2) {
+        let last = history[s][history[s].length - 1];
+        let prev = history[s][history[s].length - 2];
+        if (last > prev) signal = "BUY";
+        else if (last < prev) signal = "SELL";
+    }
 
     let mode="NONE";
     let sizeFactor=0;
@@ -88,8 +93,6 @@ setInterval(async()=>{
 
     scanData.push({symbol:s,price:p,signal,probability:prob,mode});
 
-    console.log("CHECK:",s,"Signal:",signal,"Prob:",prob,"Mode:",mode);
-
     if(sizeFactor===0) continue;
 
     if(signal && activeTrades.length<CONFIG.MAX_TRADES){
@@ -97,12 +100,7 @@ setInterval(async()=>{
         let baseQty=getPositionSize(capital,p,CONFIG);
         let qty=Math.floor(baseQty*sizeFactor);
 
-        if(qty<=0){
-          console.log("QTY BLOCK:",s);
-          continue;
-        }
-
-        console.log("TRY ORDER:",s,signal,"Qty:",qty,"Mode:",mode);
+        if(qty<=0) continue;
 
         try{
           let order=await kite.placeOrder("regular",{
@@ -114,19 +112,13 @@ setInterval(async()=>{
             order_type:"MARKET"
           });
 
-          console.log("ORDER SUCCESS:",order);
+          activeTrades.push({symbol:s,type:signal,entry:p,qty});
 
-          activeTrades.push({symbol:s,type:signal,entry:p,qty,mode});
-
-        }catch(err){
-          console.log("ORDER FAILED:",err.message);
-        }
+        }catch(err){}
     }
   }
 
- }catch(e){
-  console.log("LOOP ERROR:",e.message);
- }
+ }catch(e){}
 
 },3000);
 
@@ -137,22 +129,6 @@ app.get("/performance",(req,res)=>{
   activeTradesCount:activeTrades.length,
   scan:scanData
  });
-});
-
-app.get("/",(req,res)=>{
- res.send(`
- <h2>PRODUCTION BOT</h2>
- <button onclick="fetch('/start')">Start</button>
- <button onclick="fetch('/kill')">Kill</button>
- <pre id="d"></pre>
- <script>
- setInterval(async()=>{
-  let r=await fetch('/performance');
-  let d=await r.json();
-  document.getElementById('d').innerText=JSON.stringify(d,null,2);
- },2000);
- </script>
- `);
 });
 
 app.listen(process.env.PORT||3000);
