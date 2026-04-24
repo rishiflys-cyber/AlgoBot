@@ -20,7 +20,7 @@ const STOCKS=["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","ITC","LT","
 
 app.get("/",(req,res)=>{
  res.send(`
- <h2>FINAL BALANCED BOT</h2>
+ <h2>FINAL ADAPTIVE BOT (AUTO THRESHOLD)</h2>
  <button onclick="fetch('/start')">Start</button>
  <button onclick="fetch('/kill')">Kill</button>
  <pre id="data"></pre>
@@ -61,6 +61,15 @@ function prob(a){
  return up/a.length;
 }
 
+function volatility(a){
+ if(a.length<4) return 0;
+ let sum=0;
+ for(let i=1;i<a.length;i++){
+  sum += Math.abs(a[i]-a[i-1]);
+ }
+ return sum/a.length;
+}
+
 setInterval(async()=>{
  if(!access_token || MANUAL_KILL) return;
 
@@ -76,26 +85,27 @@ setInterval(async()=>{
 
     if(!history[s]) history[s]=[];
     history[s].push(p);
-    if(history[s].length>6) history[s].shift();
+    if(history[s].length>8) history[s].shift();
 
     let pr=prob(history[s]);
-    let trend = history[s][history[s].length-1] > history[s][0];
+    let vol=volatility(history[s]);
+
+    // 🔥 ADAPTIVE THRESHOLD
+    let dynamicThreshold = vol > 2 ? 0.35 : 0.3;
 
     let signal=null;
     let mode="NONE";
 
-    // CORE
-    if(pr>=0.5 && trend){
+    if(pr>=0.5){
       signal = history[s].at(-1) > history[s].at(-2) ? "BUY":"SELL";
       mode="CORE";
     }
-    // RELAXED SCOUT
-    else if(pr>=0.35){
+    else if(pr>=dynamicThreshold){
       signal = history[s].at(-1) > history[s].at(-2) ? "BUY":"SELL";
       mode="SCOUT";
     }
 
-    scanData.push({symbol:s,price:p,signal,probability:pr,mode});
+    scanData.push({symbol:s,price:p,signal,probability:pr,mode,threshold:dynamicThreshold});
 
     if(signal && activeTrades.length<3){
 
@@ -103,6 +113,8 @@ setInterval(async()=>{
       let qty = mode==="CORE" ? baseQty : Math.max(1,Math.floor(baseQty*0.4));
 
       try{
+        console.log("TRY ENTRY:", s, signal, qty, mode);
+
         await kite.placeOrder("regular",{
             exchange:"NSE",
             tradingsymbol:s,
@@ -115,11 +127,14 @@ setInterval(async()=>{
 
         activeTrades.push({symbol:s,entry:p,type:signal,qty});
 
-      }catch(e){}
+      }catch(e){
+        console.log("ENTRY FAILED:", e.message);
+      }
     }
   }
 
-  let remainingTrades=[];
+  // EXIT
+  let remaining=[];
   for(let t of activeTrades){
     let cp=prices[`NSE:${t.symbol}`]?.last_price;
     if(!cp) continue;
@@ -137,13 +152,15 @@ setInterval(async()=>{
             market_protection:2
         });
     } else {
-        remainingTrades.push(t);
+        remaining.push(t);
     }
   }
 
-  activeTrades = remainingTrades;
+  activeTrades = remaining;
 
- }catch(e){}
+ }catch(e){
+  console.log("LOOP ERROR:", e.message);
+ }
 
 },3000);
 
