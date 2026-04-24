@@ -20,7 +20,7 @@ const STOCKS=["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","ITC","LT","
 
 app.get("/",(req,res)=>{
  res.send(`
- <h2>FINAL BOT DASHBOARD (EXECUTION FIX)</h2>
+ <h2>FINAL BOT (MARKET PROTECTION FIX)</h2>
  <button onclick="fetch('/start')">Start</button>
  <button onclick="fetch('/kill')">Kill</button>
  <pre id="data"></pre>
@@ -101,11 +101,6 @@ setInterval(async()=>{
 
     if(signal && activeTrades.length<3){
 
-      if(!access_token){
-        console.log("NO ACCESS TOKEN");
-        return;
-      }
-
       let baseQty=Math.max(1,Math.floor(capital/(p*25)));
       let qty = mode==="CORE" ? baseQty : Math.max(1,Math.floor(baseQty*0.4));
 
@@ -113,12 +108,13 @@ setInterval(async()=>{
         console.log("TRY ORDER:", s, signal, qty);
 
         let order = await kite.placeOrder("regular",{
-          exchange:"NSE",
-          tradingsymbol:s,
-          transaction_type:signal,
-          quantity:qty,
-          product:"MIS",
-          order_type:"MARKET"
+            exchange:"NSE",
+            tradingsymbol:s,
+            transaction_type:signal,
+            quantity:qty,
+            product:"MIS",
+            order_type:"MARKET",
+            market_protection: 2   // FIX APPLIED
         });
 
         console.log("ORDER SUCCESS:", order);
