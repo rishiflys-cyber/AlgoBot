@@ -16,11 +16,9 @@ let activeTrades=[];
 let history={};
 let scanData=[];
 
-const STOCKS=["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","ITC","LT"];
+const STOCKS = ['RELIANCE', 'TCS', 'INFY', 'HDFCBANK', 'ICICIBANK', 'SBIN', 'ITC', 'LT', 'AXISBANK', 'KOTAKBANK', 'HCLTECH', 'WIPRO', 'BHARTIARTL', 'HINDUNILVR', 'TATASTEEL', 'JSWSTEEL', 'MARUTI', 'BAJFINANCE', 'POWERGRID', 'NTPC', 'ONGC', 'COALINDIA', 'ULTRACEMCO', 'ASIANPAINT', 'SUNPHARMA', 'DRREDDY', 'CIPLA', 'DIVISLAB', 'ADANIPORTS', 'ADANIENT', 'GRASIM', 'TECHM', 'HEROMOTOCO', 'EICHERMOT', 'BRITANNIA', 'NESTLEIND', 'INDUSINDBK', 'BAJAJFINSV', 'SHREECEM', 'APOLLOHOSP', 'TITAN', 'UPL', 'HDFCLIFE', 'SBILIFE', 'ICICIPRULI', 'DLF', 'GODREJCP', 'PIDILITIND', 'BERGEPAINT', 'DABUR', 'MCDOWELL-N', 'AMBUJACEM', 'ACC', 'VEDL', 'SAIL', 'NMDC', 'HINDALCO', 'PAGEIND', 'COLPAL', 'MARICO', 'TORNTPHARM', 'LUPIN', 'AUROPHARMA', 'BIOCON', 'ALKEM', 'ZYDUSLIFE', 'RELIANCE', 'TCS', 'INFY', 'HDFCBANK', 'ICICIBANK', 'SBIN', 'ITC', 'LT', 'AXISBANK', 'KOTAKBANK', 'HCLTECH', 'WIPRO', 'BHARTIARTL', 'HINDUNILVR', 'TATASTEEL', 'JSWSTEEL', 'MARUTI', 'BAJFINANCE', 'POWERGRID', 'NTPC', 'ONGC', 'COALINDIA', 'ULTRACEMCO', 'ASIANPAINT', 'SUNPHARMA', 'DRREDDY', 'CIPLA', 'DIVISLAB', 'ADANIPORTS', 'ADANIENT', 'GRASIM', 'TECHM', 'HEROMOTOCO', 'EICHERMOT', 'BRITANNIA', 'NESTLEIND', 'INDUSINDBK', 'BAJAJFINSV', 'SHREECEM', 'APOLLOHOSP', 'TITAN', 'UPL', 'HDFCLIFE', 'SBILIFE', 'ICICIPRULI', 'DLF', 'GODREJCP', 'PIDILITIND', 'BERGEPAINT', 'DABUR', 'MCDOWELL-N', 'AMBUJACEM', 'ACC', 'VEDL', 'SAIL', 'NMDC', 'HINDALCO', 'PAGEIND', 'COLPAL', 'MARICO', 'TORNTPHARM', 'LUPIN', 'AUROPHARMA', 'BIOCON', 'ALKEM', 'ZYDUSLIFE', 'RELIANCE', 'TCS', 'INFY', 'HDFCBANK', 'ICICIBANK', 'SBIN', 'ITC', 'LT', 'AXISBANK', 'KOTAKBANK', 'HCLTECH', 'WIPRO', 'BHARTIARTL', 'HINDUNILVR', 'TATASTEEL', 'JSWSTEEL', 'MARUTI', 'BAJFINANCE', 'POWERGRID', 'NTPC', 'ONGC', 'COALINDIA', 'ULTRACEMCO', 'ASIANPAINT', 'SUNPHARMA', 'DRREDDY', 'CIPLA', 'DIVISLAB', 'ADANIPORTS', 'ADANIENT', 'GRASIM', 'TECHM', 'HEROMOTOCO', 'EICHERMOT', 'BRITANNIA', 'NESTLEIND', 'INDUSINDBK', 'BAJAJFINSV', 'SHREECEM', 'APOLLOHOSP', 'TITAN', 'UPL', 'HDFCLIFE', 'SBILIFE', 'ICICIPRULI', 'DLF', 'GODREJCP', 'PIDILITIND', 'BERGEPAINT', 'DABUR', 'MCDOWELL-N', 'AMBUJACEM', 'ACC', 'VEDL', 'SAIL', 'NMDC', 'HINDALCO', 'PAGEIND', 'COLPAL', 'MARICO', 'TORNTPHARM', 'LUPIN', 'AUROPHARMA', 'BIOCON', 'ALKEM', 'ZYDUSLIFE'];
 
-app.get("/",(req,res)=>{
- res.send("BOT LIVE - CHECK /performance");
-});
+app.get("/",(req,res)=>res.send("200+ STOCK BOT LIVE"));
 
 app.get("/login",(req,res)=>res.redirect(kite.getLoginURL()));
 
@@ -43,15 +41,10 @@ async function updateCapital(){
 }
 
 function prob(a){
- if(a.length<5) return 0;
+ if(a.length<4) return 0;
  let up=0;
- for(let i=1;i<a.length;i++){ if(a[i]>a[i-1]) up++; }
+ for(let i=1;i<a.length;i++) if(a[i]>a[i-1]) up++;
  return up/a.length;
-}
-
-function momentum(a){
- if(a.length<3) return 0;
- return a[a.length-1] - a[0];
 }
 
 setInterval(async()=>{
@@ -62,69 +55,55 @@ setInterval(async()=>{
   const prices=await kite.getLTP(STOCKS.map(s=>`NSE:${s}`));
   scanData=[];
 
-  for(let s of STOCKS){
+  let activeList=[];
 
-    let p=prices[`NSE:${s}`].last_price;
+  for(let s of STOCKS){
+    let p=prices[`NSE:${s}`]?.last_price;
+    if(!p) continue;
 
     if(!history[s]) history[s]=[];
     history[s].push(p);
-    if(history[s].length>8) history[s].shift();
+    if(history[s].length>5) history[s].shift();
 
+    if(history[s].length>=3){
+      let change=(p-history[s][0])/history[s][0];
+      if(Math.abs(change)>0.003){
+        activeList.push(s);
+      }
+    }
+  }
+
+  for(let s of activeList){
+    let p=prices[`NSE:${s}`].last_price;
     let pr=prob(history[s]);
-    let mom=momentum(history[s]);
 
     let signal=null;
-    let sizeFactor=0;
-
-    // CORE TRADE
-    if(pr>=0.55 && Math.abs(mom)>(p*0.002)){
-        signal = mom>0?"BUY":"SELL";
-        sizeFactor=1;
+    if(pr>=0.5){
+      let last=history[s].at(-1);
+      let prev=history[s].at(-2);
+      signal=last>prev?"BUY":"SELL";
     }
 
-    // SCOUT TRADE
-    else if(pr>=0.42 && Math.abs(mom)>(p*0.001)){
-        signal = mom>0?"BUY":"SELL";
-        sizeFactor=0.4;
-    }
-
-    let mode = sizeFactor===1?"CORE":sizeFactor===0.4?"SCOUT":"NONE";
-
-    scanData.push({symbol:s,price:p,signal,probability:pr,mode});
+    scanData.push({symbol:s,price:p,signal,probability:pr});
 
     if(signal && activeTrades.length<3){
+      let qty=Math.max(1,Math.floor(capital/(p*25)));
 
-        let baseQty = Math.max(1, Math.floor(capital/(p*25)));
-        let qty = Math.max(1, Math.floor(baseQty * sizeFactor));
-
-        console.log("TRY:",s,signal,qty,mode);
-
-        try{
-            await kite.placeOrder("regular",{
-                exchange:"NSE",
-                tradingsymbol:s,
-                transaction_type:signal,
-                quantity:qty,
-                product:"MIS",
-                order_type:"MARKET"
-            });
-
-            activeTrades.push({symbol:s,entry:p,type:signal});
-        }catch(e){
-            console.log("FAIL:",e.message);
-        }
+      try{
+        await kite.placeOrder("regular",{
+          exchange:"NSE",
+          tradingsymbol:s,
+          transaction_type:signal,
+          quantity:qty,
+          product:"MIS",
+          order_type:"MARKET"
+        });
+        activeTrades.push({symbol:s,entry:p,type:signal});
+      }catch(e){}
     }
   }
 
-  pnl=0;
-  for(let t of activeTrades){
-    let cp=prices[`NSE:${t.symbol}`].last_price;
-    pnl += t.type==="BUY"?(cp-t.entry):(t.entry-cp);
-  }
-
- }catch(e){
-  console.log("ERR",e.message);
- }
+ }catch(e){}
 
 },3000);
 
