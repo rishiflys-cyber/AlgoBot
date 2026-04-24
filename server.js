@@ -12,27 +12,9 @@ let MANUAL_KILL = false;
 
 let capital = 0;
 let pnl = 0;
-let activeTrades = [];
-let history = {};
-let lastPrice = {};
-let scanData = [];
-
-const STOCKS = ["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK"];
 
 app.get("/", (req,res)=>{
- res.send(`
- <h2>FINAL BOT LIVE (CAPITAL + PNL)</h2>
- <button onclick="fetch('/start')">Start</button>
- <button onclick="fetch('/kill')">Kill</button>
- <pre id="d"></pre>
- <script>
- setInterval(async()=>{
-  let r = await fetch('/performance');
-  let d = await r.json();
-  document.getElementById('d').innerText = JSON.stringify(d,null,2);
- },2000);
- </script>
- `);
+ res.send("BOT LIVE - CHECK /performance");
 });
 
 app.get("/login",(req,res)=>res.redirect(kite.getLoginURL()));
@@ -59,87 +41,37 @@ app.get("/kill",(req,res)=>{
  res.send("STOPPED");
 });
 
+// 🔥 FIXED CAPITAL FETCH
 async function updateCapital(){
  try{
   let m = await kite.getMargins();
-  capital = m.equity.available.cash || 0;
- }catch(e){}
-}
 
-function probability(arr){
- if(arr.length < 4) return 0;
- let up=0;
- for(let i=1;i<arr.length;i++){
-  if(arr[i]>arr[i-1]) up++;
+  capital =
+    m?.equity?.available?.live_balance ||
+    m?.equity?.available?.cash ||
+    m?.equity?.net ||
+    m?.equity?.available?.opening_balance ||
+    0;
+
+  console.log("CAPITAL SYNC:", capital);
+
+ }catch(e){
+  console.log("CAPITAL ERROR:", e.message);
  }
- return up/arr.length;
 }
 
 setInterval(async()=>{
  if(!access_token || MANUAL_KILL) return;
 
- try{
-  await updateCapital();
-  const prices = await kite.getLTP(STOCKS.map(s=>`NSE:${s}`));
-  scanData=[];
+ await updateCapital();
 
-  for(let s of STOCKS){
-
-    let p = prices[`NSE:${s}`].last_price;
-
-    if(!history[s]) history[s]=[];
-    history[s].push(p);
-    if(history[s].length>6) history[s].shift();
-
-    let prob = probability(history[s]);
-
-    let signal=null;
-    if(prob>=0.45 && history[s].length>=2){
-      let last=history[s].at(-1);
-      let prev=history[s].at(-2);
-      signal = last>prev ? "BUY" : "SELL";
-    }
-
-    let mode = prob>=0.45 ? "STRONG" : prob>=0.40 ? "EARLY" : "NONE";
-
-    scanData.push({symbol:s,price:p,signal,probability:prob,mode});
-
-    if(signal && activeTrades.length<5){
-      try{
-        await kite.placeOrder("regular",{
-          exchange:"NSE",
-          tradingsymbol:s,
-          transaction_type:signal,
-          quantity:1,
-          product:"MIS",
-          order_type:"MARKET"
-        });
-
-        activeTrades.push({symbol:s,entry:p,type:signal});
-
-      }catch(e){}
-    }
-  }
-
-  // PnL calc (simple mark-to-market)
-  pnl = 0;
-  for(let t of activeTrades){
-    let current = prices[`NSE:${t.symbol}`].last_price;
-    if(t.type==="BUY") pnl += (current - t.entry);
-    else pnl += (t.entry - current);
-  }
-
- }catch(e){}
-
-},3000);
+},5000);
 
 app.get("/performance",(req,res)=>{
  res.json({
   capital,
   pnl,
-  botActive: BOT_ACTIVE && !MANUAL_KILL,
-  activeTradesCount: activeTrades.length,
-  scan: scanData
+  botActive: BOT_ACTIVE && !MANUAL_KILL
  });
 });
 
