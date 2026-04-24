@@ -11,16 +11,17 @@ let BOT_ACTIVE = false;
 let MANUAL_KILL = false;
 
 let capital = 0;
+let pnl = 0;
 let activeTrades = [];
 let history = {};
 let lastPrice = {};
 let scanData = [];
 
-const STOCKS = ["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","ITC","LT","AXISBANK","KOTAKBANK"];
+const STOCKS = ["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK"];
 
 app.get("/", (req,res)=>{
  res.send(`
- <h2>FINAL BOT LIVE</h2>
+ <h2>FINAL BOT LIVE (CAPITAL + PNL)</h2>
  <button onclick="fetch('/start')">Start</button>
  <button onclick="fetch('/kill')">Kill</button>
  <pre id="d"></pre>
@@ -58,6 +59,13 @@ app.get("/kill",(req,res)=>{
  res.send("STOPPED");
 });
 
+async function updateCapital(){
+ try{
+  let m = await kite.getMargins();
+  capital = m.equity.available.cash || 0;
+ }catch(e){}
+}
+
 function probability(arr){
  if(arr.length < 4) return 0;
  let up=0;
@@ -71,6 +79,7 @@ setInterval(async()=>{
  if(!access_token || MANUAL_KILL) return;
 
  try{
+  await updateCapital();
   const prices = await kite.getLTP(STOCKS.map(s=>`NSE:${s}`));
   scanData=[];
 
@@ -84,24 +93,18 @@ setInterval(async()=>{
 
     let prob = probability(history[s]);
 
-    let signal = null;
+    let signal=null;
     if(prob>=0.45 && history[s].length>=2){
-      let last = history[s].at(-1);
-      let prev = history[s].at(-2);
-      if(last>prev) signal="BUY";
-      else if(last<prev) signal="SELL";
+      let last=history[s].at(-1);
+      let prev=history[s].at(-2);
+      signal = last>prev ? "BUY" : "SELL";
     }
 
-    let mode="NONE";
-    if(prob>=0.45) mode="STRONG";
-    else if(prob>=0.40) mode="EARLY";
+    let mode = prob>=0.45 ? "STRONG" : prob>=0.40 ? "EARLY" : "NONE";
 
     scanData.push({symbol:s,price:p,signal,probability:prob,mode});
 
-    console.log("CHECK", s, signal, prob);
-
     if(signal && activeTrades.length<5){
-      console.log("TRY ORDER", s, signal);
       try{
         await kite.placeOrder("regular",{
           exchange:"NSE",
@@ -111,19 +114,29 @@ setInterval(async()=>{
           product:"MIS",
           order_type:"MARKET"
         });
-        activeTrades.push({s,signal});
-      }catch(e){
-        console.log("ORDER FAILED", e.message);
-      }
+
+        activeTrades.push({symbol:s,entry:p,type:signal});
+
+      }catch(e){}
     }
   }
 
- }catch(e){ console.log("ERROR", e.message); }
+  // PnL calc (simple mark-to-market)
+  pnl = 0;
+  for(let t of activeTrades){
+    let current = prices[`NSE:${t.symbol}`].last_price;
+    if(t.type==="BUY") pnl += (current - t.entry);
+    else pnl += (t.entry - current);
+  }
+
+ }catch(e){}
 
 },3000);
 
 app.get("/performance",(req,res)=>{
  res.json({
+  capital,
+  pnl,
   botActive: BOT_ACTIVE && !MANUAL_KILL,
   activeTradesCount: activeTrades.length,
   scan: scanData
