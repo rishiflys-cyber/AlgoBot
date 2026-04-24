@@ -15,20 +15,21 @@ let pnl=0;
 let activeTrades=[];
 let history={};
 let scanData=[];
+let cycleCount=0;
 
-const STOCKS=["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","ITC","LT","AXISBANK","KOTAKBANK"];
+const STOCKS=["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","ITC","LT"];
 
 app.get("/",(req,res)=>{
  res.send(`
- <h2>FINAL BOT DASHBOARD</h2>
+ <h2>MONEY MAGNET BOT</h2>
  <button onclick="fetch('/start')">Start</button>
  <button onclick="fetch('/kill')">Kill</button>
- <pre id="data"></pre>
+ <pre id="d"></pre>
  <script>
  setInterval(async()=>{
   let r=await fetch('/performance');
   let d=await r.json();
-  document.getElementById('data').innerText=JSON.stringify(d,null,2);
+  document.getElementById('d').innerText=JSON.stringify(d,null,2);
  },2000);
  </script>
  `);
@@ -37,26 +38,15 @@ app.get("/",(req,res)=>{
 app.get("/login",(req,res)=>res.redirect(kite.getLoginURL()));
 
 app.get("/redirect",async(req,res)=>{
- try{
-  const s=await kite.generateSession(req.query.request_token,process.env.KITE_API_SECRET);
-  access_token=s.access_token;
-  kite.setAccessToken(access_token);
-  BOT_ACTIVE=true;
-  res.send("Login Success");
- }catch(e){res.send(e.message);}
-});
-
-app.get("/start",(req,res)=>{
+ const s=await kite.generateSession(req.query.request_token,process.env.KITE_API_SECRET);
+ access_token=s.access_token;
+ kite.setAccessToken(access_token);
  BOT_ACTIVE=true;
- MANUAL_KILL=false;
- res.send("STARTED");
+ res.send("Login Success");
 });
 
-app.get("/kill",(req,res)=>{
- BOT_ACTIVE=false;
- MANUAL_KILL=true;
- res.send("STOPPED");
-});
+app.get("/start",(req,res)=>{BOT_ACTIVE=true;MANUAL_KILL=false;res.send("STARTED");});
+app.get("/kill",(req,res)=>{BOT_ACTIVE=false;MANUAL_KILL=true;res.send("STOPPED");});
 
 async function updateCapital(){
  try{
@@ -65,78 +55,101 @@ async function updateCapital(){
  }catch(e){}
 }
 
-function probability(arr){
- if(arr.length<4) return 0;
+function prob(a){
+ if(a.length<4) return 0;
  let up=0;
- for(let i=1;i<arr.length;i++){
-  if(arr[i]>arr[i-1]) up++;
- }
- return up/arr.length;
+ for(let i=1;i<a.length;i++){ if(a[i]>a[i-1]) up++; }
+ return up/a.length;
 }
 
 setInterval(async()=>{
  if(!access_token||MANUAL_KILL) return;
 
  try{
+  cycleCount++;
   await updateCapital();
   const prices=await kite.getLTP(STOCKS.map(s=>`NSE:${s}`));
   scanData=[];
 
   for(let s of STOCKS){
+
     let p=prices[`NSE:${s}`].last_price;
 
     if(!history[s]) history[s]=[];
     history[s].push(p);
     if(history[s].length>6) history[s].shift();
 
-    let prob=probability(history[s]);
+    let pr=prob(history[s]);
 
     let signal=null;
 
-    if(prob>=0.45 && history[s].length>=2){
-      let last=history[s].at(-1);
-      let prev=history[s].at(-2);
-      signal= last>prev ? "BUY":"SELL";
+    if(pr>=0.45 && history[s].length>=2){
+      let l=history[s].at(-1);
+      let pr2=history[s].at(-2);
+      signal = l>pr2?"BUY":"SELL";
     }
 
-    if(!signal && prob>=0.30 && history[s].length>=2){
-      let last=history[s].at(-1);
-      let prev=history[s].at(-2);
-      signal= last>prev ? "BUY":"SELL";
+    if(!signal && pr>=0.30 && history[s].length>=2){
+      let l=history[s].at(-1);
+      let pr2=history[s].at(-2);
+      signal = l>pr2?"BUY":"SELL";
     }
 
-    let mode= prob>=0.45?"STRONG":prob>=0.30?"EARLY":"NONE";
+    let mode= pr>=0.45?"STRONG":pr>=0.30?"EARLY":"NONE";
 
-    scanData.push({symbol:s,price:p,signal,probability:prob,mode});
+    scanData.push({symbol:s,price:p,signal,probability:pr,mode});
 
-    console.log("EXEC:",s,signal,prob);
+    let qty = Math.max(1, Math.floor(capital/(p*20)));
 
     if(signal && activeTrades.length<3){
+      console.log("TRY:",s,signal,qty);
+
       try{
         await kite.placeOrder("regular",{
           exchange:"NSE",
           tradingsymbol:s,
           transaction_type:signal,
-          quantity:1,
+          quantity:qty,
           product:"MIS",
           order_type:"MARKET"
         });
 
         activeTrades.push({symbol:s,entry:p,type:signal});
       }catch(e){
-        console.log("ORDER FAIL",e.message);
+        console.log("FAIL:",e.message);
       }
     }
   }
 
+  // 🔥 FORCE TRADE IF NONE AFTER SOME TIME
+  if(activeTrades.length===0 && cycleCount>10){
+    let s=STOCKS[0];
+    let p=prices[`NSE:${s}`].last_price;
+
+    console.log("FORCED TRADE:",s);
+
+    try{
+      await kite.placeOrder("regular",{
+        exchange:"NSE",
+        tradingsymbol:s,
+        transaction_type:"BUY",
+        quantity:1,
+        product:"MIS",
+        order_type:"MARKET"
+      });
+
+      activeTrades.push({symbol:s,entry:p,type:"BUY"});
+    }catch(e){}
+  }
+
   pnl=0;
   for(let t of activeTrades){
-    let current=prices[`NSE:${t.symbol}`].last_price;
-    pnl += t.type==="BUY" ? (current-t.entry):(t.entry-current);
+    let cp=prices[`NSE:${t.symbol}`].last_price;
+    pnl += t.type==="BUY"?(cp-t.entry):(t.entry-cp);
   }
 
  }catch(e){
-  console.log("LOOP ERR",e.message);
+  console.log("ERR",e.message);
  }
 
 },3000);
