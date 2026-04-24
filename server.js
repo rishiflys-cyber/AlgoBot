@@ -15,17 +15,12 @@ let pnl=0;
 let activeTrades=[];
 let history={};
 let scanData=[];
-let cooldowns={};
-
-const MAX_TRADES = 5;
-const COOLDOWN_MS = 5 * 60 * 1000;
-const MAX_DAILY_LOSS = -0.02; // -2%
 
 const STOCKS=["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","ITC","LT","AXISBANK","KOTAKBANK"];
 
 app.get("/",(req,res)=>{
  res.send(`
- <h2>FINAL AGGRESSIVE SAFE BOT</h2>
+ <h2>FINAL BOT (PnL FIXED)</h2>
  <button onclick="fetch('/start')">Start</button>
  <button onclick="fetch('/kill')">Kill</button>
  <pre id="data"></pre>
@@ -71,13 +66,6 @@ setInterval(async()=>{
 
  try{
   await updateCapital();
-
-  if((pnl/capital) < MAX_DAILY_LOSS){
-    console.log("MAX LOSS HIT - STOPPING BOT");
-    BOT_ACTIVE=false;
-    return;
-  }
-
   const prices=await kite.getLTP(STOCKS.map(s=>`NSE:${s}`));
   scanData=[];
 
@@ -91,9 +79,6 @@ setInterval(async()=>{
     if(history[s].length>8) history[s].shift();
 
     let pr=prob(history[s]);
-
-    let now = Date.now();
-    if(cooldowns[s] && now - cooldowns[s] < COOLDOWN_MS) continue;
 
     let signal=null;
     let mode="NONE";
@@ -109,16 +94,12 @@ setInterval(async()=>{
 
     scanData.push({symbol:s,price:p,signal,probability:pr,mode});
 
-    let alreadyActive = activeTrades.find(t=>t.symbol===s);
-
-    if(signal && activeTrades.length<MAX_TRADES && !alreadyActive){
+    if(signal && activeTrades.length<5){
 
       let baseQty=Math.max(1,Math.floor(capital/(p*25)));
       let qty = mode==="CORE" ? baseQty : Math.max(1,Math.floor(baseQty*0.4));
 
       try{
-        console.log("ENTRY:", s, signal);
-
         await kite.placeOrder("regular",{
             exchange:"NSE",
             tradingsymbol:s,
@@ -131,12 +112,24 @@ setInterval(async()=>{
 
         activeTrades.push({symbol:s,entry:p,type:signal,qty});
 
-      }catch(e){
-        console.log("ENTRY FAILED:", e.message);
-      }
+      }catch(e){}
     }
   }
 
+  // 🔥 LIVE PnL CALCULATION
+  pnl = 0;
+  for (let t of activeTrades) {
+    let cp = prices[`NSE:${t.symbol}`]?.last_price;
+    if (!cp) continue;
+
+    let tradePnl = t.type === "BUY"
+        ? (cp - t.entry) * t.qty
+        : (t.entry - cp) * t.qty;
+
+    pnl += tradePnl;
+  }
+
+  // EXIT
   let remaining=[];
   for(let t of activeTrades){
     let cp=prices[`NSE:${t.symbol}`]?.last_price;
@@ -145,7 +138,6 @@ setInterval(async()=>{
     let profit = t.type==="BUY"?(cp-t.entry):(t.entry-cp);
 
     if(profit > t.entry*0.0035 || profit < -t.entry*0.002){
-
         await kite.placeOrder("regular",{
             exchange:"NSE",
             tradingsymbol:t.symbol,
@@ -155,9 +147,6 @@ setInterval(async()=>{
             order_type:"MARKET",
             market_protection:2
         });
-
-        cooldowns[t.symbol] = Date.now();
-
     } else {
         remaining.push(t);
     }
@@ -165,9 +154,7 @@ setInterval(async()=>{
 
   activeTrades = remaining;
 
- }catch(e){
-  console.log("LOOP ERROR:", e.message);
- }
+ }catch(e){}
 
 },3000);
 
