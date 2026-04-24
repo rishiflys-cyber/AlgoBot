@@ -19,19 +19,7 @@ let scanData=[];
 const STOCKS=["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","ITC","LT"];
 
 app.get("/",(req,res)=>{
- res.send(`
- <h2>PROFIT EDGE BOT</h2>
- <button onclick="fetch('/start')">Start</button>
- <button onclick="fetch('/kill')">Kill</button>
- <pre id="d"></pre>
- <script>
- setInterval(async()=>{
-  let r=await fetch('/performance');
-  let d=await r.json();
-  document.getElementById('d').innerText=JSON.stringify(d,null,2);
- },2000);
- </script>
- `);
+ res.send("BOT LIVE - CHECK /performance");
 });
 
 app.get("/login",(req,res)=>res.redirect(kite.getLoginURL()));
@@ -86,22 +74,30 @@ setInterval(async()=>{
     let mom=momentum(history[s]);
 
     let signal=null;
+    let sizeFactor=0;
 
-    // PROFIT EDGE CONDITION (trend + momentum)
-    if(pr>=0.55 && Math.abs(mom) > (p*0.002)){
-        signal = mom>0 ? "BUY":"SELL";
+    // CORE TRADE
+    if(pr>=0.55 && Math.abs(mom)>(p*0.002)){
+        signal = mom>0?"BUY":"SELL";
+        sizeFactor=1;
     }
 
-    let mode = pr>=0.55 ? "STRONG" : pr>=0.45 ? "WATCH" : "NONE";
+    // SCOUT TRADE
+    else if(pr>=0.42 && Math.abs(mom)>(p*0.001)){
+        signal = mom>0?"BUY":"SELL";
+        sizeFactor=0.4;
+    }
+
+    let mode = sizeFactor===1?"CORE":sizeFactor===0.4?"SCOUT":"NONE";
 
     scanData.push({symbol:s,price:p,signal,probability:pr,mode});
 
-    console.log("EDGE:",s,signal,pr,mom);
+    if(signal && activeTrades.length<3){
 
-    // EXECUTION
-    if(signal && activeTrades.length<2){
+        let baseQty = Math.max(1, Math.floor(capital/(p*25)));
+        let qty = Math.max(1, Math.floor(baseQty * sizeFactor));
 
-        let qty = Math.max(1, Math.floor(capital/(p*25))); // safer sizing
+        console.log("TRY:",s,signal,qty,mode);
 
         try{
             await kite.placeOrder("regular",{
@@ -114,10 +110,8 @@ setInterval(async()=>{
             });
 
             activeTrades.push({symbol:s,entry:p,type:signal});
-            console.log("ORDER SUCCESS", s);
-
         }catch(e){
-            console.log("ORDER FAIL", e.message);
+            console.log("FAIL:",e.message);
         }
     }
   }
