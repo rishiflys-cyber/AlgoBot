@@ -806,3 +806,78 @@ if(perfRoute){
 }
 
 // ================= END INSIGHTS =================
+
+
+// ================= SAFE AUTO-OPTIMIZATION ENGINE =================
+
+// bounded adaptive config (SAFE LIMITS)
+let autoConfig = {
+  minQuality: 65,
+  minProb: 0.5
+};
+
+function autoOptimize(){
+  try{
+    let real = pnl || 0;
+    let shadow = shadowPnL || 0;
+
+    // only act if enough trades
+    if(closedTrades.length < 10) return;
+
+    // divergence logic
+    let diff = shadow - real;
+
+    // SAFE bounded adjustments
+    if(diff > 0){ 
+      // shadow better → loosen slightly
+      autoConfig.minQuality = Math.max(60, autoConfig.minQuality - 1);
+      autoConfig.minProb = Math.max(0.5, autoConfig.minProb - 0.01);
+    } else if(diff < 0){
+      // live better → tighten slightly
+      autoConfig.minQuality = Math.min(80, autoConfig.minQuality + 1);
+      autoConfig.minProb = Math.min(0.6, autoConfig.minProb + 0.01);
+    }
+
+  }catch(e){
+    console.log("AutoOptimize Error:", e.message);
+  }
+}
+
+// APPLY (SAFE HOOK)
+// call autoOptimize() once every cycle (after pnl update)
+
+// MODIFY SIGNAL FILTER (SAFE ADDITIVE)
+// replace existing threshold checks with:
+function passesAutoFilter(tradeQualityScore, pr){
+  return (
+    tradeQualityScore >= autoConfig.minQuality &&
+    pr >= autoConfig.minProb
+  );
+}
+
+// DASHBOARD ADD
+const perfRoute2 = app._router.stack.find(r => r.route && r.route.path === '/performance');
+
+if(perfRoute2){
+  app.get("/performance",(req,res)=>{
+    let insightData = (typeof generateInsights==="function") ? generateInsights() : {};
+
+    res.json({
+      botActive:BOT_ACTIVE,
+      capital,
+      pnl,
+      serverIP,
+      activeTradesCount:activeTrades.length,
+      scan:scanOutput,
+      activeTrades,
+      closedTrades,
+      shadowPnL,
+      shadowActive: shadowTrades.length,
+      shadowClosed,
+      insights: insightData,
+      autoConfig
+    });
+  });
+}
+
+// ================= END AUTO OPTIMIZATION =================
