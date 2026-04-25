@@ -556,3 +556,78 @@ if(originalPerfRoute){
 }
 
 // ================= END DASHBOARD =================
+
+
+// ================= EQUITY GRAPH UI + DRAWDOWN ALERT =================
+
+// ALERT THRESHOLD
+const DRAWDOWN_ALERT = 0.03; // 3%
+
+let alertTriggered = false;
+
+// MODIFY DASHBOARD UI (replace "/" route HTML)
+app.get("/",(req,res)=>{
+ res.send(`
+ <h2>FINAL MULTI-STRATEGY SYSTEM</h2>
+ <button onclick="location.href='/login'">Login</button>
+ <button onclick="fetch('/start')">Start</button>
+ <button onclick="fetch('/kill')">Kill</button>
+
+ <canvas id="equityChart" width="800" height="300"></canvas>
+ <pre id="data"></pre>
+
+ <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+ <script>
+ let chart;
+
+ async function loadData(){
+  let r = await fetch('/performance');
+  let d = await r.json();
+
+  document.getElementById('data').innerText = JSON.stringify(d,null,2);
+
+  let labels = d.equityHistory.map(x=> new Date(x.time).toLocaleTimeString());
+  let values = d.equityHistory.map(x=> x.equity);
+
+  if(!chart){
+    const ctx = document.getElementById('equityChart').getContext('2d');
+    chart = new Chart(ctx,{
+      type:'line',
+      data:{
+        labels:labels,
+        datasets:[{
+          label:'Equity Curve',
+          data:values,
+          fill:false,
+          tension:0.1
+        }]
+      }
+    });
+  } else {
+    chart.data.labels = labels;
+    chart.data.datasets[0].data = values;
+    chart.update();
+  }
+ }
+
+ setInterval(loadData,2000);
+ </script>
+ `);
+});
+
+// DRAWDOWN ALERT (SERVER SIDE)
+function checkDrawdownAlert(drawdown){
+  if(drawdown > DRAWDOWN_ALERT && !alertTriggered){
+    console.log("⚠️ ALERT: Drawdown breached", drawdown);
+    alertTriggered = true;
+  }
+  if(drawdown < DRAWDOWN_ALERT){
+    alertTriggered = false;
+  }
+}
+
+// INTEGRATION NOTE:
+// call checkDrawdownAlert(eq.dd) inside performance update
+
+// ================= END UI + ALERT =================
