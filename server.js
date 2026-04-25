@@ -1780,3 +1780,61 @@ if(perfRoute12){
 }
 
 // ================= END WEEKLY REPORT =================
+
+
+// ================= FUND-STYLE CONTROL PANEL =================
+
+// consolidated decision engine
+function fundControlPanel(){
+  let exp = computeExpectancy() || {};
+  let dd = maxDrawdown || 0;
+  let risk = expectancyRiskMultiplier ? expectancyRiskMultiplier() : 1;
+
+  let decision = "HOLD";
+
+  if(exp.expectancy > 0 && exp.winRate > 0.6 && dd < 0.03){
+    decision = "SCALE UP";
+  } else if(exp.expectancy > 0 && dd < 0.05){
+    decision = "MAINTAIN";
+  } else if(exp.expectancy <= 0 || dd > 0.05){
+    decision = "REDUCE RISK";
+  }
+
+  return {
+    capital,
+    pnl,
+    drawdown: dd,
+    expectancy: exp.expectancy || 0,
+    winRate: exp.winRate || 0,
+    riskMultiplier: risk,
+    decision
+  };
+}
+
+// ================= DASHBOARD EXTENSION =================
+const perfRouteFinal = app._router.stack.find(r => r.route && r.route.path === '/performance');
+
+if(perfRouteFinal){
+  app.get("/performance",(req,res)=>{
+    res.json({
+      botActive:BOT_ACTIVE,
+      capital,
+      pnl,
+      serverIP,
+      activeTradesCount:activeTrades.length,
+      scan:scanOutput,
+      activeTrades,
+      closedTrades,
+
+      // FUND PANEL
+      fundPanel: fundControlPanel(),
+
+      // EXISTING
+      expectancy: computeExpectancy(),
+      edge: edgeStatus(),
+      weeklyReport
+    });
+  });
+}
+
+// ================= END FUND PANEL =================
