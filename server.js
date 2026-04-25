@@ -881,3 +881,95 @@ if(perfRoute2){
 }
 
 // ================= END AUTO OPTIMIZATION =================
+
+
+// ================= MULTI-STRATEGY PORTFOLIO ENGINE =================
+
+// Strategy registry
+let strategies = {
+  momentum: true,
+  meanReversion: true,
+  breakout: true
+};
+
+// Strategy performance tracking
+let strategyStats = {
+  momentum: { pnl: 0, trades: 0 },
+  meanReversion: { pnl: 0, trades: 0 },
+  breakout: { pnl: 0, trades: 0 }
+};
+
+// Strategy selection
+function runStrategies(s, price, history, volumeHistory){
+  let signals = [];
+
+  try{
+    // Momentum (existing logic reuse)
+    let pr = history[s]?.length > 3 ? (
+      history[s].filter((v,i,a)=> i>0 && v>a[i-1]).length / history[s].length
+    ) : 0;
+
+    if(strategies.momentum && pr >= 0.6){
+      signals.push({type:"BUY", strategy:"momentum"});
+    }
+
+    // Mean Reversion (simple)
+    let avg = history[s]?.reduce((a,b)=>a+b,0)/ (history[s]?.length||1);
+    if(strategies.meanReversion && avg && price < avg*0.995){
+      signals.push({type:"BUY", strategy:"meanReversion"});
+    }
+
+    // Breakout
+    let max = Math.max(...(history[s]||[price]));
+    if(strategies.breakout && price >= max){
+      signals.push({type:"BUY", strategy:"breakout"});
+    }
+
+  }catch(e){}
+
+  return signals;
+}
+
+// Strategy weighting (based on performance)
+function pickBestSignal(signals){
+  if(!signals.length) return null;
+
+  signals.sort((a,b)=>{
+    let pa = strategyStats[a.strategy]?.pnl || 0;
+    let pb = strategyStats[b.strategy]?.pnl || 0;
+    return pb - pa;
+  });
+
+  return signals[0];
+}
+
+// Update stats
+function updateStrategyStats(strategy, pnl){
+  if(!strategyStats[strategy]) return;
+  strategyStats[strategy].pnl += pnl;
+  strategyStats[strategy].trades += 1;
+}
+
+// Dashboard extension
+const perfRoute3 = app._router.stack.find(r => r.route && r.route.path === '/performance');
+
+if(perfRoute3){
+  app.get("/performance",(req,res)=>{
+    res.json({
+      botActive:BOT_ACTIVE,
+      capital,
+      pnl,
+      serverIP,
+      activeTradesCount:activeTrades.length,
+      scan:scanOutput,
+      activeTrades,
+      closedTrades,
+      shadowPnL,
+      shadowActive: shadowTrades.length,
+      shadowClosed,
+      strategyStats
+    });
+  });
+}
+
+// ================= END MULTI-STRATEGY =================
