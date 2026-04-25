@@ -631,3 +631,34 @@ function checkDrawdownAlert(drawdown){
 // call checkDrawdownAlert(eq.dd) inside performance update
 
 // ================= END UI + ALERT =================
+
+
+// ================= AUTO DISABLE + RECOVERY MODE =================
+
+// CONFIG
+const DD_HARD_STOP = 0.03;   // 3% stop trading
+const DD_RECOVERY = 0.015;   // resume below 1.5%
+
+let tradingDisabled = false;
+
+// MODIFY drawdown check
+function enhancedDrawdownControl(drawdown){
+  if(drawdown >= DD_HARD_STOP){
+    tradingDisabled = true;
+    console.log("🛑 TRADING DISABLED (Drawdown breach):", drawdown);
+  }
+
+  if(tradingDisabled && drawdown <= DD_RECOVERY){
+    tradingDisabled = false;
+    console.log("✅ RECOVERY MODE COMPLETE - Trading Resumed:", drawdown);
+  }
+}
+
+// INTEGRATION:
+// 1. After equity calculation:
+// enhancedDrawdownControl(eq.dd);
+
+// 2. Before placing trade:
+// if(tradingDisabled) signal = null;
+
+// ================= END AUTO CONTROL =================
