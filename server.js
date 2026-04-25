@@ -497,3 +497,62 @@ function adjustedRisk(baseRisk, capital){
 // market_protection: safeMarketProtection(0)
 
 // ================= END PATCH =================
+
+
+// ================= EQUITY CURVE + DRAWDOWN DASHBOARD =================
+
+// EQUITY TRACKING
+let equityHistory = [];
+let maxEquity = 0;
+let maxDrawdown = 0;
+
+function updateEquity(pnl){
+  let currentEquity = capital + pnl;
+
+  equityHistory.push({
+    time: new Date(),
+    equity: currentEquity
+  });
+
+  if(equityHistory.length > 500) equityHistory.shift();
+
+  // Track peak
+  if(currentEquity > maxEquity) maxEquity = currentEquity;
+
+  // Drawdown calc
+  let dd = maxEquity > 0 ? (maxEquity - currentEquity) / maxEquity : 0;
+  if(dd > maxDrawdown) maxDrawdown = dd;
+
+  return {currentEquity, dd};
+}
+
+// DASHBOARD EXTENSION (SAFE ADD)
+const originalPerfRoute = app._router.stack.find(r => r.route && r.route.path === '/performance');
+
+if(originalPerfRoute){
+  app.get("/performance",(req,res)=>{
+    let analyticsData = (typeof getAnalytics === "function") ? getAnalytics() : {};
+
+    let eq = updateEquity(pnl);
+
+    res.json({
+      botActive: BOT_ACTIVE,
+      capital,
+      pnl,
+      serverIP,
+      activeTradesCount: activeTrades.length,
+      scan: scanOutput,
+      activeTrades,
+      closedTrades,
+
+      // NEW DASHBOARD DATA
+      analytics: analyticsData,
+      equity: eq.currentEquity,
+      drawdown: eq.dd,
+      maxDrawdown,
+      equityHistory
+    });
+  });
+}
+
+// ================= END DASHBOARD =================
