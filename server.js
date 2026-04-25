@@ -748,3 +748,61 @@ if(existingPerf){
 }
 
 // ================= END SHADOW =================
+
+
+// ================= LIVE VS SHADOW COMPARISON + AUTO INSIGHTS =================
+
+// INSIGHT ENGINE
+let insights = {
+  divergence: 0,
+  betterSystem: "EQUAL",
+  executionIssue: false
+};
+
+function generateInsights(){
+  let real = pnl || 0;
+  let shadow = shadowPnL || 0;
+
+  insights.divergence = shadow - real;
+
+  if(shadow > real * 1.1){
+    insights.betterSystem = "SHADOW";
+    insights.executionIssue = true;
+  } else if(real > shadow * 1.1){
+    insights.betterSystem = "LIVE";
+    insights.executionIssue = false;
+  } else {
+    insights.betterSystem = "EQUAL";
+    insights.executionIssue = false;
+  }
+
+  return insights;
+}
+
+// EXTEND DASHBOARD SAFELY
+const perfRoute = app._router.stack.find(r => r.route && r.route.path === '/performance');
+
+if(perfRoute){
+  app.get("/performance",(req,res)=>{
+    let insightData = generateInsights();
+
+    res.json({
+      botActive:BOT_ACTIVE,
+      capital,
+      pnl,
+      serverIP,
+      activeTradesCount:activeTrades.length,
+      scan:scanOutput,
+      activeTrades,
+      closedTrades,
+
+      shadowPnL,
+      shadowActive: shadowTrades.length,
+      shadowClosed,
+
+      insights: insightData
+    });
+  });
+}
+
+// ================= END INSIGHTS =================
