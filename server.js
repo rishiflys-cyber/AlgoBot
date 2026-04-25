@@ -973,3 +973,81 @@ if(perfRoute3){
 }
 
 // ================= END MULTI-STRATEGY =================
+
+
+// ================= STRATEGY ROTATION + CAPITAL ALLOCATION =================
+
+// Strategy capital weights
+let strategyAllocation = {
+  momentum: 0.34,
+  meanReversion: 0.33,
+  breakout: 0.33
+};
+
+// Normalize weights
+function normalizeAlloc(){
+  let total = Object.values(strategyAllocation).reduce((a,b)=>a+b,0);
+  if(total === 0) return;
+  for(let k in strategyAllocation){
+    strategyAllocation[k] = strategyAllocation[k] / total;
+  }
+}
+
+// Rotation logic (based on performance)
+function rotateCapital(){
+  try{
+    let totalPnL = Object.values(strategyStats).reduce((a,b)=>a + b.pnl,0);
+    if(totalPnL === 0) return;
+
+    for(let k in strategyStats){
+      let perf = strategyStats[k].pnl;
+
+      // proportional allocation (bounded)
+      let weight = perf / totalPnL;
+
+      // smooth adjustment
+      strategyAllocation[k] = Math.max(0.1, Math.min(0.6, weight));
+    }
+
+    normalizeAlloc();
+
+  }catch(e){
+    console.log("Rotation error:", e.message);
+  }
+}
+
+// Capital allocation per trade
+function getStrategyQty(price, strategy){
+  if(!capital) return 1;
+
+  let baseRisk = adaptiveRisk ? adaptiveRisk() : 0.02;
+  let alloc = strategyAllocation[strategy] || 0.33;
+
+  let risk = capital * baseRisk * alloc;
+  return Math.max(1, Math.floor(risk / price));
+}
+
+// Dashboard extension
+const perfRoute4 = app._router.stack.find(r => r.route && r.route.path === '/performance');
+
+if(perfRoute4){
+  app.get("/performance",(req,res)=>{
+    res.json({
+      botActive:BOT_ACTIVE,
+      capital,
+      pnl,
+      serverIP,
+      activeTradesCount:activeTrades.length,
+      scan:scanOutput,
+      activeTrades,
+      closedTrades,
+      shadowPnL,
+      shadowActive: shadowTrades.length,
+      shadowClosed,
+      strategyStats,
+      strategyAllocation
+    });
+  });
+}
+
+// ================= END STRATEGY ROTATION =================
