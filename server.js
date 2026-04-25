@@ -662,3 +662,89 @@ function enhancedDrawdownControl(drawdown){
 // if(tradingDisabled) signal = null;
 
 // ================= END AUTO CONTROL =================
+
+
+// ================= SHADOW SIMULATOR (SAFE, NON-INTERFERING) =================
+
+// Shadow state (completely separate)
+let shadowTrades = [];
+let shadowClosed = [];
+let shadowPnL = 0;
+
+// Simulate entry (NO real order)
+function shadowEnter(symbol, price, type, qty){
+  shadowTrades.push({
+    symbol,
+    entry: price,
+    type,
+    qty
+  });
+}
+
+// Simulate exit
+function shadowExit(trade, price){
+  let profit = trade.type==="BUY" ? (price - trade.entry) : (trade.entry - price);
+  let pnl = profit * trade.qty;
+
+  shadowClosed.push(pnl);
+  shadowPnL += pnl;
+}
+
+// Hook: AFTER signal generation (NON-BLOCKING)
+function shadowProcessSignal(symbol, price, signal, qty){
+  if(!signal) return;
+
+  // prevent duplicate shadow trades
+  if(shadowTrades.find(t=>t.symbol===symbol)) return;
+
+  shadowEnter(symbol, price, signal, qty);
+}
+
+// Hook: INSIDE activeTrades loop (mirror exit logic safely)
+function shadowMonitorExit(quotes){
+  let remaining = [];
+
+  for(let t of shadowTrades){
+    let cp = quotes["NSE:"+t.symbol]?.last_price;
+    if(!cp){
+      remaining.push(t);
+      continue;
+    }
+
+    let profit = t.type==="BUY" ? (cp - t.entry) : (t.entry - cp);
+
+    // same SL/TP logic (approx mirror)
+    if(profit > t.entry*0.003 || profit < -t.entry*0.002){
+      shadowExit(t, cp);
+    } else {
+      remaining.push(t);
+    }
+  }
+
+  shadowTrades = remaining;
+}
+
+// Extend dashboard safely
+const existingPerf = app._router.stack.find(r => r.route && r.route.path === '/performance');
+
+if(existingPerf){
+  app.get("/performance",(req,res)=>{
+    res.json({
+      botActive:BOT_ACTIVE,
+      capital,
+      pnl,
+      serverIP,
+      activeTradesCount:activeTrades.length,
+      scan:scanOutput,
+      activeTrades,
+      closedTrades,
+
+      // SHADOW DATA
+      shadowPnL,
+      shadowActive: shadowTrades.length,
+      shadowClosed
+    });
+  });
+}
+
+// ================= END SHADOW =================
