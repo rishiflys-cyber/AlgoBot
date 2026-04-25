@@ -18,6 +18,9 @@ let history={};
 let volumeHistory={};
 let scanOutput=[];
 let serverIP="UNKNOWN";
+let volatilityMap={};
+let priceHistory={};
+let lossTracker={};
 
 // GET SERVER IP
 async function updateIP(){
@@ -57,7 +60,7 @@ function getIndexTrend(){
 // VOLUME BREAKOUT
 function volumeBreakout(symbol, vol){
  if(!volumeHistory[symbol]) return false;
- let avg = volumeHistory[symbol].reduce((a,b)=>a+b,0)/volumeHistory[symbol].length;
+ let avg = (volumeHistory[symbol] && volumeHistory[symbol].length>0) ? volumeHistory[symbol].reduce((a,b)=>a+b,0)/volumeHistory[symbol].length : vol || 1;
  return vol > avg * 1.5;
 }
 
@@ -138,6 +141,21 @@ setInterval(async()=>{
     if(!history[s]) history[s]=[];
     history[s].push(price);
     if(history[s].length>6) history[s].shift();
+    // VOLATILITY
+    if(!priceHistory[s]) priceHistory[s]=[];
+    priceHistory[s].push(price);
+    if(priceHistory[s].length>20) priceHistory[s].shift();
+
+    let volatility=0;
+    if(priceHistory[s].length>5){
+      let moves=[];
+      for(let i=1;i<priceHistory[s].length;i++){
+        moves.push(Math.abs(priceHistory[s][i]-priceHistory[s][i-1]));
+      }
+      volatility = moves.reduce((a,b)=>a+b,0)/moves.length;
+    }
+    volatilityMap[s]=volatility;
+
 
     if(!volumeHistory[s]) volumeHistory[s]=[];
     volumeHistory[s].push(vol);
@@ -198,8 +216,12 @@ setInterval(async()=>{
     if(!cp) continue;
 
     let profit=t.type==="BUY"?(cp-t.entry):(t.entry-cp);
+    let vol = volatilityMap[t.symbol] || 0;
+    let volPercent = t.entry ? (vol/t.entry):0;
+    let slPercent = Math.max(volPercent*1.2,0.0015);
+    let tpPercent = slPercent*1.5;
 
-    if(profit>t.entry*0.003 || profit<-t.entry*0.002){
+    if(profit > t.entry*tpPercent || profit < -t.entry*slPercent){
       await kite.placeOrder("regular",{
         exchange:"NSE",
         tradingsymbol:t.symbol,
@@ -210,6 +232,12 @@ setInterval(async()=>{
       });
 
       closedTrades.push(profit*t.qty);
+      if(!lossTracker[t.symbol]) lossTracker[t.symbol]={consecutive:0,cooldown:0};
+      if(profit<0){ lossTracker[t.symbol].consecutive+=1;} else {lossTracker[t.symbol].consecutive=0;}
+      if(lossTracker[t.symbol].consecutive>=2){
+        lossTracker[t.symbol].cooldown=Date.now()+5*60*1000;
+      }
+
     } else {
       unreal+=profit*t.qty;
       remaining.push(t);
@@ -238,89 +266,3 @@ app.get("/performance",(req,res)=>{
 });
 
 app.listen(process.env.PORT||3000);
-
-
-// ================== ADVANCED UPGRADE PATCH (NON-BREAKING) ==================
-
-// NEW STATE
-let priceHistory = {};
-let lossTracker = {};
-let cooldownMinutes = 5;
-let regimeData = {};
-
-// ===== INSERT BELOW history[s] update =====
-// VOLATILITY TRACKING
-if(!priceHistory[s]) priceHistory[s]=[];
-priceHistory[s].push(price);
-if(priceHistory[s].length>20) priceHistory[s].shift();
-
-let volatility=0;
-if(priceHistory[s].length>5){
- let moves=[];
- for(let i=1;i<priceHistory[s].length;i++){
-  moves.push(Math.abs(priceHistory[s][i]-priceHistory[s][i-1]));
- }
- volatility = moves.reduce((a,b)=>a+b,0)/moves.length;
-}
-
-// ===== INSERT AFTER volumeBreakout =====
-let avgVol = volumeHistory[s].reduce((a,b)=>a+b,0)/volumeHistory[s].length;
-let range = Math.max(...priceHistory[s]) - Math.min(...priceHistory[s]);
-let normalizedRange = price ? range/price : 0;
-let volConsistency = vol / avgVol;
-
-let regime="NORMAL";
-let regimeStrength=0.6;
-
-if(normalizedRange < 0.002 && volConsistency < 1.2){
- regime="SIDEWAYS";
- regimeStrength=0.2;
-}else if(normalizedRange > 0.006 && volConsistency > 1.5){
- regime="VOLATILE";
- regimeStrength=0.9;
-}
-
-regimeData[s]={regime, regimeStrength};
-
-// ===== TRADE QUALITY SCORE =====
-let momentumScore = pr * 100;
-let volumeScore = Math.min(vol/avgVol,2)*50;
-let agreementScoreNorm = (agreement/3)*100;
-
-let tradeQualityScore =
- (momentumScore*0.4) +
- (volumeScore*0.3) +
- (agreementScoreNorm*0.3);
-
-if(regime==="SIDEWAYS") tradeQualityScore *= 0.7;
-if(volumeScore < 50) tradeQualityScore *= (volumeScore/50);
-
-tradeQualityScore = Math.max(0,Math.min(100,tradeQualityScore));
-
-// ===== SIGNAL FILTER =====
-let inCooldown = lossTracker[s] && Date.now() < lossTracker[s].cooldown;
-
-if(regime==="SIDEWAYS") signal=null;
-
-if(regime==="VOLATILE"){
- if(pr < 0.6 || vol < avgVol*1.8) signal=null;
-}
-
-if(tradeQualityScore < 65) signal=null;
-
-// ===== LOSS TRACKING (ON CLOSE) =====
-if(!lossTracker[t.symbol]){
- lossTracker[t.symbol]={consecutive:0,cooldown:0};
-}
-
-if(profit < 0){
- lossTracker[t.symbol].consecutive +=1;
-}else{
- lossTracker[t.symbol].consecutive = 0;
-}
-
-if(lossTracker[t.symbol].consecutive >=2){
- lossTracker[t.symbol].cooldown = Date.now() + cooldownMinutes*60*1000;
-}
-
-// ================== END PATCH ==================
