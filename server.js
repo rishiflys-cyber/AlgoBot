@@ -238,3 +238,89 @@ app.get("/performance",(req,res)=>{
 });
 
 app.listen(process.env.PORT||3000);
+
+
+// ================== ADVANCED UPGRADE PATCH (NON-BREAKING) ==================
+
+// NEW STATE
+let priceHistory = {};
+let lossTracker = {};
+let cooldownMinutes = 5;
+let regimeData = {};
+
+// ===== INSERT BELOW history[s] update =====
+// VOLATILITY TRACKING
+if(!priceHistory[s]) priceHistory[s]=[];
+priceHistory[s].push(price);
+if(priceHistory[s].length>20) priceHistory[s].shift();
+
+let volatility=0;
+if(priceHistory[s].length>5){
+ let moves=[];
+ for(let i=1;i<priceHistory[s].length;i++){
+  moves.push(Math.abs(priceHistory[s][i]-priceHistory[s][i-1]));
+ }
+ volatility = moves.reduce((a,b)=>a+b,0)/moves.length;
+}
+
+// ===== INSERT AFTER volumeBreakout =====
+let avgVol = volumeHistory[s].reduce((a,b)=>a+b,0)/volumeHistory[s].length;
+let range = Math.max(...priceHistory[s]) - Math.min(...priceHistory[s]);
+let normalizedRange = price ? range/price : 0;
+let volConsistency = vol / avgVol;
+
+let regime="NORMAL";
+let regimeStrength=0.6;
+
+if(normalizedRange < 0.002 && volConsistency < 1.2){
+ regime="SIDEWAYS";
+ regimeStrength=0.2;
+}else if(normalizedRange > 0.006 && volConsistency > 1.5){
+ regime="VOLATILE";
+ regimeStrength=0.9;
+}
+
+regimeData[s]={regime, regimeStrength};
+
+// ===== TRADE QUALITY SCORE =====
+let momentumScore = pr * 100;
+let volumeScore = Math.min(vol/avgVol,2)*50;
+let agreementScoreNorm = (agreement/3)*100;
+
+let tradeQualityScore =
+ (momentumScore*0.4) +
+ (volumeScore*0.3) +
+ (agreementScoreNorm*0.3);
+
+if(regime==="SIDEWAYS") tradeQualityScore *= 0.7;
+if(volumeScore < 50) tradeQualityScore *= (volumeScore/50);
+
+tradeQualityScore = Math.max(0,Math.min(100,tradeQualityScore));
+
+// ===== SIGNAL FILTER =====
+let inCooldown = lossTracker[s] && Date.now() < lossTracker[s].cooldown;
+
+if(regime==="SIDEWAYS") signal=null;
+
+if(regime==="VOLATILE"){
+ if(pr < 0.6 || vol < avgVol*1.8) signal=null;
+}
+
+if(tradeQualityScore < 65) signal=null;
+
+// ===== LOSS TRACKING (ON CLOSE) =====
+if(!lossTracker[t.symbol]){
+ lossTracker[t.symbol]={consecutive:0,cooldown:0};
+}
+
+if(profit < 0){
+ lossTracker[t.symbol].consecutive +=1;
+}else{
+ lossTracker[t.symbol].consecutive = 0;
+}
+
+if(lossTracker[t.symbol].consecutive >=2){
+ lossTracker[t.symbol].cooldown = Date.now() + cooldownMinutes*60*1000;
+}
+
+// ================== END PATCH ==================
