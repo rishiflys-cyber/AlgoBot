@@ -266,3 +266,46 @@ app.get("/performance",(req,res)=>{
 });
 
 app.listen(process.env.PORT||3000);
+
+
+// ================== NEXT LEVEL UPGRADE (NON-BREAKING) ==================
+
+// MULTI-TIMEFRAME STORAGE
+let mtfHistory = {}; // {symbol: {m1:[], m5:[]}}
+
+// STOCK RANKING
+function rankStocks(scan){
+  return scan
+    .sort((a,b)=> (b.tradeQualityScore||0) - (a.tradeQualityScore||0))
+    .slice(0,5);
+}
+
+// ENHANCED POSITION SIZING
+function enhancedQty(price, score){
+  if(!capital) return 1;
+  let pct = 0.02;
+  if(score>=90) pct=0.06;
+  else if(score>=80) pct=0.05;
+  else if(score>=70) pct=0.03;
+  let risk = capital * pct;
+  return Math.max(1, Math.floor(risk/price));
+}
+
+// DAILY LOSS GUARD
+let startCapital=0;
+let dailyLossLock=false;
+
+// INIT start capital
+setTimeout(()=>{ startCapital = capital; },10000);
+
+// APPLY INSIDE LOOP (SAFE CHECK)
+function riskGuard(){
+  if(!startCapital) return false;
+  let dd = (startCapital - capital)/startCapital;
+  if(dd > 0.02){
+    dailyLossLock = true;
+  }
+  return dailyLossLock;
+}
+
+// ================== END UPGRADE ==================
