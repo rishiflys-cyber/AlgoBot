@@ -1144,3 +1144,93 @@ if(perfRoute5){
 }
 
 // ================= END RISK OVERLAY =================
+
+
+// ================= BROKER EXECUTION OPTIMIZATION =================
+
+// --- LATENCY TRACKING ---
+let latencyStats = {
+  lastOrderTime: 0,
+  avgLatency: 0,
+  samples: []
+};
+
+function trackLatency(startTime){
+  let latency = Date.now() - startTime;
+  latencyStats.samples.push(latency);
+  if(latencyStats.samples.length > 50) latencyStats.samples.shift();
+
+  latencyStats.avgLatency = latencyStats.samples.reduce((a,b)=>a+b,0) / latencyStats.samples.length;
+}
+
+// --- ORDER SLICING ---
+function sliceOrder(qty){
+  if(qty <= 1) return [qty];
+
+  let slices = [];
+  let maxSlice = Math.ceil(qty / 3); // split into max 3 parts
+
+  let remaining = qty;
+
+  while(remaining > 0){
+    let part = Math.min(maxSlice, remaining);
+    slices.push(part);
+    remaining -= part;
+  }
+
+  return slices;
+}
+
+// --- SMART EXECUTION ---
+async function executeOrder(kite, orderParams){
+  try{
+    let start = Date.now();
+
+    let slices = sliceOrder(orderParams.quantity);
+
+    for(let q of slices){
+      let params = {
+        ...orderParams,
+        quantity: q
+      };
+
+      await kite.placeOrder("regular", params);
+
+      // slight delay to avoid burst
+      await new Promise(res => setTimeout(res, 150));
+    }
+
+    trackLatency(start);
+
+  }catch(e){
+    console.log("Execution error:", e.message);
+  }
+}
+
+// ================= DASHBOARD EXTENSION =================
+const perfRoute6 = app._router.stack.find(r => r.route && r.route.path === '/performance');
+
+if(perfRoute6){
+  app.get("/performance",(req,res)=>{
+    res.json({
+      botActive:BOT_ACTIVE,
+      capital,
+      pnl,
+      serverIP,
+      activeTradesCount:activeTrades.length,
+      scan:scanOutput,
+      activeTrades,
+      closedTrades,
+      shadowPnL,
+      strategyStats,
+      strategyAllocation,
+      exposure: getCurrentExposure(),
+      var: calculateVaR(),
+
+      // EXECUTION METRICS
+      latency: latencyStats.avgLatency
+    });
+  });
+}
+
+// ================= END EXECUTION OPTIMIZATION =================
