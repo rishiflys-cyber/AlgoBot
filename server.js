@@ -1612,3 +1612,74 @@ if(perfRoute10){
 }
 
 // ================= END EXPECTANCY =================
+
+
+// ================= AUTO CAPITAL SCALING (EXPECTANCY-DRIVEN) =================
+
+// dynamic risk multiplier based on expectancy
+function expectancyRiskMultiplier(){
+  let e = computeExpectancy();
+  if(!e) return 1;
+
+  // strong edge
+  if(e.expectancy > 0 && e.winRate > 0.6){
+    return 1.5; // scale up
+  }
+
+  // moderate edge
+  if(e.expectancy > 0 && e.winRate > 0.52){
+    return 1.2;
+  }
+
+  // weak edge
+  if(e.expectancy > 0){
+    return 1.0;
+  }
+
+  // no edge → reduce risk
+  return 0.5;
+}
+
+// integrate with existing position sizing
+function finalQty(price, baseRiskPct){
+  if(!capital) return 1;
+
+  let multiplier = expectancyRiskMultiplier();
+  let risk = capital * baseRiskPct * multiplier;
+
+  return Math.max(1, Math.floor(risk / price));
+}
+
+// ================= DASHBOARD EXTENSION =================
+const perfRoute11 = app._router.stack.find(r => r.route && r.route.path === '/performance');
+
+if(perfRoute11){
+  app.get("/performance",(req,res)=>{
+    let exp = computeExpectancy();
+
+    res.json({
+      botActive:BOT_ACTIVE,
+      capital,
+      pnl,
+      serverIP,
+      activeTradesCount:activeTrades.length,
+      scan:scanOutput,
+      activeTrades,
+      closedTrades,
+      shadowPnL,
+      strategyStats,
+      strategyAllocation,
+      exposure: getCurrentExposure(),
+      var: calculateVaR(),
+      latency: latencyStats.avgLatency,
+
+      expectancy: exp,
+      edge: edgeStatus(),
+
+      // NEW SCALING METRIC
+      riskMultiplier: expectancyRiskMultiplier()
+    });
+  });
+}
+
+// ================= END AUTO SCALING =================
