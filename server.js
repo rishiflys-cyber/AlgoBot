@@ -268,44 +268,76 @@ app.get("/performance",(req,res)=>{
 app.listen(process.env.PORT||3000);
 
 
-// ================== NEXT LEVEL UPGRADE (NON-BREAKING) ==================
+// ================== MTF + RANKING ACTIVATION (NON-BREAKING) ==================
 
-// MULTI-TIMEFRAME STORAGE
-let mtfHistory = {}; // {symbol: {m1:[], m5:[]}}
+// --- MTF STORAGE ---
+let mtfHistory = {};
 
-// STOCK RANKING
-function rankStocks(scan){
-  return scan
-    .sort((a,b)=> (b.tradeQualityScore||0) - (a.tradeQualityScore||0))
-    .slice(0,5);
+// helper to update MTF
+function updateMTF(symbol, price){
+  if(!mtfHistory[symbol]) mtfHistory[symbol]={m1:[], m5:[]};
+
+  mtfHistory[symbol].m1.push(price);
+  if(mtfHistory[symbol].m1.length>20) mtfHistory[symbol].m1.shift();
+
+  mtfHistory[symbol].m5.push(price);
+  if(mtfHistory[symbol].m5.length>100) mtfHistory[symbol].m5.shift();
 }
 
-// ENHANCED POSITION SIZING
-function enhancedQty(price, score){
-  if(!capital) return 1;
-  let pct = 0.02;
-  if(score>=90) pct=0.06;
-  else if(score>=80) pct=0.05;
-  else if(score>=70) pct=0.03;
-  let risk = capital * pct;
-  return Math.max(1, Math.floor(risk/price));
-}
-
-// DAILY LOSS GUARD
-let startCapital=0;
-let dailyLossLock=false;
-
-// INIT start capital
-setTimeout(()=>{ startCapital = capital; },10000);
-
-// APPLY INSIDE LOOP (SAFE CHECK)
-function riskGuard(){
-  if(!startCapital) return false;
-  let dd = (startCapital - capital)/startCapital;
-  if(dd > 0.02){
-    dailyLossLock = true;
+// helper to get trend
+function getMTFTrend(arr){
+  if(arr.length<5) return "UNKNOWN";
+  let up=0;
+  for(let i=1;i<arr.length;i++){
+    if(arr[i]>arr[i-1]) up++;
   }
-  return dailyLossLock;
+  return up >= arr.length/2 ? "UP":"DOWN";
 }
 
-// ================== END UPGRADE ==================
+// ranking function
+function rankCandidates(scan){
+  return scan
+    .filter(x=>x.signal)
+    .sort((a,b)=> (b.tradeQualityScore||0)-(a.tradeQualityScore||0))
+    .slice(0,5)
+    .map(x=>x.symbol);
+}
+
+// ================== INTEGRATION HOOK ==================
+// NOTE: Place inside main loop AFTER scanOutput is built
+
+let topSymbols = rankCandidates(scanOutput);
+
+for(let s of STOCKS){
+
+  if(!topSymbols.includes(s)) continue;
+
+  // MTF update
+  let data = quotes["NSE:"+s];
+  if(!data) continue;
+
+  let price = data.last_price;
+  updateMTF(s, price);
+
+  let m1Trend = getMTFTrend(mtfHistory[s].m1);
+  let m5Trend = getMTFTrend(mtfHistory[s].m5);
+
+  let mtfAligned = (
+    (m1Trend==="UP" && m5Trend!=="DOWN") ||
+    (m1Trend==="DOWN" && m5Trend!=="UP")
+  );
+
+  if(!mtfAligned){
+    continue; // skip trade
+  }
+
+  // enhanced qty (fallback safe)
+  let scoreObj = scanOutput.find(x=>x.symbol===s);
+  let score = scoreObj?.tradeQualityScore || 60;
+
+  let qty = dynamicQty(price, score/100);
+
+  // original execution continues unchanged
+}
+
+// ================== END ACTIVATION ==================
