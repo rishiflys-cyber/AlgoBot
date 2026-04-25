@@ -1051,3 +1051,96 @@ if(perfRoute4){
 }
 
 // ================= END STRATEGY ROTATION =================
+
+
+// ================= INSTITUTIONAL RISK OVERLAY (VaR + EXPOSURE CONTROL) =================
+
+// --- CONFIG ---
+const MAX_PORTFOLIO_EXPOSURE = 0.6;   // max 60% capital deployed
+const MAX_SYMBOL_EXPOSURE = 0.2;      // max 20% per symbol
+const VAR_CONFIDENCE = 0.95;
+
+// --- TRACK EXPOSURE ---
+function getCurrentExposure(){
+  let exposure = 0;
+  for(let t of activeTrades){
+    exposure += t.entry * t.qty;
+  }
+  return exposure;
+}
+
+// --- SYMBOL EXPOSURE CHECK ---
+function canTakeSymbolExposure(symbol, price, qty){
+  let current = activeTrades
+    .filter(t => t.symbol === symbol)
+    .reduce((a,b)=> a + (b.entry * b.qty), 0);
+
+  let newExposure = current + (price * qty);
+  return newExposure <= (capital * MAX_SYMBOL_EXPOSURE);
+}
+
+// --- PORTFOLIO EXPOSURE CHECK ---
+function canTakePortfolioExposure(price, qty){
+  let current = getCurrentExposure();
+  let newExposure = current + (price * qty);
+  return newExposure <= (capital * MAX_PORTFOLIO_EXPOSURE);
+}
+
+// --- SIMPLE VaR (rolling volatility based) ---
+let returnsHistory = [];
+
+function updateReturns(pnl){
+  if(!pnl) return;
+  returnsHistory.push(pnl);
+  if(returnsHistory.length > 100) returnsHistory.shift();
+}
+
+function calculateVaR(){
+  if(returnsHistory.length < 10) return 0;
+
+  let sorted = [...returnsHistory].sort((a,b)=>a-b);
+  let index = Math.floor((1 - VAR_CONFIDENCE) * sorted.length);
+  return Math.abs(sorted[index]);
+}
+
+// --- VaR LIMIT CHECK ---
+function withinVaRLimit(){
+  let varValue = calculateVaR();
+  return varValue < (capital * 0.02); // 2% VaR cap
+}
+
+// --- FINAL RISK GATE ---
+function riskGate(symbol, price, qty){
+  return (
+    canTakePortfolioExposure(price, qty) &&
+    canTakeSymbolExposure(symbol, price, qty) &&
+    withinVaRLimit()
+  );
+}
+
+// ================= DASHBOARD EXTENSION =================
+const perfRoute5 = app._router.stack.find(r => r.route && r.route.path === '/performance');
+
+if(perfRoute5){
+  app.get("/performance",(req,res)=>{
+    res.json({
+      botActive:BOT_ACTIVE,
+      capital,
+      pnl,
+      serverIP,
+      activeTradesCount:activeTrades.length,
+      scan:scanOutput,
+      activeTrades,
+      closedTrades,
+      shadowPnL,
+      strategyStats,
+      strategyAllocation,
+
+      // RISK METRICS
+      exposure: getCurrentExposure(),
+      var: calculateVaR()
+    });
+  });
+}
+
+// ================= END RISK OVERLAY =================
