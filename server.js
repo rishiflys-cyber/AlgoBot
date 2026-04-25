@@ -1328,3 +1328,106 @@ if(perfRoute7){
 }
 
 // ================= END MICROSTRUCTURE =================
+
+
+// ================= CROSS-MARKET ARBITRAGE + OPTIONS OVERLAY =================
+
+// -------- INDEX vs STOCK ARBITRAGE (SIMPLE SPREAD EDGE) --------
+function indexArbitrage(symbolPrice, indexPrice){
+  try{
+    if(!symbolPrice || !indexPrice) return null;
+
+    let spread = (symbolPrice / indexPrice);
+
+    // baseline (can tune)
+    if(spread > 1.02){
+      return "SELL"; // stock overvalued vs index
+    }
+    if(spread < 0.98){
+      return "BUY"; // stock undervalued
+    }
+
+    return null;
+  }catch(e){
+    return null;
+  }
+}
+
+// -------- OPTIONS OVERLAY (HEDGE LOGIC) --------
+function optionsHedge(signal, volatility){
+  try{
+    if(!signal) return null;
+
+    // crude hedge logic
+    if(volatility > 0.02){
+      return {
+        hedge: true,
+        type: signal === "BUY" ? "PUT" : "CALL"
+      };
+    }
+
+    return { hedge:false };
+
+  }catch(e){
+    return null;
+  }
+}
+
+// -------- IMPLIED VOLATILITY PROXY --------
+function estimateVolatility(history){
+  if(!history || history.length < 5) return 0;
+
+  let changes = [];
+  for(let i=1;i<history.length;i++){
+    changes.push(Math.abs(history[i] - history[i-1]) / history[i-1]);
+  }
+
+  return changes.reduce((a,b)=>a+b,0)/changes.length;
+}
+
+// -------- FINAL ARBITRAGE + OPTIONS GATE --------
+function advancedOverlay(signal, symbolPrice, indexPrice, history){
+  let arb = indexArbitrage(symbolPrice, indexPrice);
+
+  // If arbitrage contradicts → cancel
+  if(arb && arb !== signal){
+    return null;
+  }
+
+  let vol = estimateVolatility(history);
+  let hedge = optionsHedge(signal, vol);
+
+  return {
+    signal,
+    hedge
+  };
+}
+
+// ================= DASHBOARD EXTENSION =================
+const perfRoute8 = app._router.stack.find(r => r.route && r.route.path === '/performance');
+
+if(perfRoute8){
+  app.get("/performance",(req,res)=>{
+    res.json({
+      botActive:BOT_ACTIVE,
+      capital,
+      pnl,
+      serverIP,
+      activeTradesCount:activeTrades.length,
+      scan:scanOutput,
+      activeTrades,
+      closedTrades,
+      shadowPnL,
+      strategyStats,
+      strategyAllocation,
+      exposure: getCurrentExposure(),
+      var: calculateVaR(),
+      latency: latencyStats.avgLatency,
+
+      // OVERLAY STATUS
+      overlay: "enabled"
+    });
+  });
+}
+
+// ================= END OVERLAY =================
