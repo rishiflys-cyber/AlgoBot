@@ -1838,3 +1838,88 @@ if(perfRouteFinal){
 }
 
 // ================= END FUND PANEL =================
+
+
+// ================= MONTHLY CAPITAL PLANNER + AUTO REINVEST =================
+
+// config
+let capitalPlan = {
+  monthlyAddition: 10000,   // user adjustable
+  reinvestPercent: 0.7      // 70% profits reinvested
+};
+
+let monthlyStats = {
+  startCapital: 0,
+  currentMonth: new Date().getMonth(),
+  profit: 0
+};
+
+// reset at new month
+function checkMonthReset(){
+  let nowMonth = new Date().getMonth();
+  if(nowMonth !== monthlyStats.currentMonth){
+    monthlyStats.startCapital = capital;
+    monthlyStats.currentMonth = nowMonth;
+    monthlyStats.profit = 0;
+  }
+}
+
+// update monthly profit
+function updateMonthlyProfit(){
+  checkMonthReset();
+  monthlyStats.profit = capital - monthlyStats.startCapital;
+}
+
+// planner logic
+function capitalPlanner(){
+  updateMonthlyProfit();
+
+  let reinvest = monthlyStats.profit > 0 
+    ? monthlyStats.profit * capitalPlan.reinvestPercent 
+    : 0;
+
+  let withdraw = monthlyStats.profit > 0 
+    ? monthlyStats.profit * (1 - capitalPlan.reinvestPercent) 
+    : 0;
+
+  let projectedNext = capital + capitalPlan.monthlyAddition + reinvest;
+
+  return {
+    startCapital: monthlyStats.startCapital,
+    currentCapital: capital,
+    monthlyProfit: monthlyStats.profit,
+    reinvest,
+    withdraw,
+    monthlyAddition: capitalPlan.monthlyAddition,
+    projectedNextCapital: projectedNext
+  };
+}
+
+// ================= DASHBOARD EXTENSION =================
+const perfRoute13 = app._router.stack.find(r => r.route && r.route.path === '/performance');
+
+if(perfRoute13){
+  app.get("/performance",(req,res)=>{
+    res.json({
+      botActive:BOT_ACTIVE,
+      capital,
+      pnl,
+      serverIP,
+      activeTradesCount:activeTrades.length,
+      scan:scanOutput,
+      activeTrades,
+      closedTrades,
+
+      fundPanel: fundControlPanel(),
+
+      expectancy: computeExpectancy(),
+      edge: edgeStatus(),
+      weeklyReport,
+
+      // NEW CAPITAL PLAN
+      capitalPlan: capitalPlanner()
+    });
+  });
+}
+
+// ================= END CAPITAL PLANNER =================
