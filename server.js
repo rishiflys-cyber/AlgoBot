@@ -1522,3 +1522,93 @@ if(perfRoute9){
 }
 
 // ================= END SOR =================
+
+
+// ================= EXPECTANCY + EDGE VALIDATION MODULE =================
+
+// trade outcome tracking
+let tradeStats = {
+  wins: 0,
+  losses: 0,
+  total: 0,
+  totalWin: 0,
+  totalLoss: 0
+};
+
+// update after each closed trade
+function updateTradeStats(pnl){
+  tradeStats.total++;
+
+  if(pnl > 0){
+    tradeStats.wins++;
+    tradeStats.totalWin += pnl;
+  } else {
+    tradeStats.losses++;
+    tradeStats.totalLoss += pnl;
+  }
+}
+
+// compute expectancy
+function computeExpectancy(){
+  if(tradeStats.total === 0) return null;
+
+  let winRate = tradeStats.wins / tradeStats.total;
+  let lossRate = tradeStats.losses / tradeStats.total;
+
+  let avgWin = tradeStats.wins ? tradeStats.totalWin / tradeStats.wins : 0;
+  let avgLoss = tradeStats.losses ? Math.abs(tradeStats.totalLoss / tradeStats.losses) : 0;
+
+  let expectancy = (winRate * avgWin) - (lossRate * avgLoss);
+
+  return {
+    winRate,
+    lossRate,
+    avgWin,
+    avgLoss,
+    expectancy
+  };
+}
+
+// edge validation logic
+function edgeStatus(){
+  let e = computeExpectancy();
+  if(!e) return "NO_DATA";
+
+  if(e.expectancy > 0){
+    if(e.winRate > 0.55) return "STRONG_EDGE";
+    return "WEAK_EDGE";
+  }
+  return "NO_EDGE";
+}
+
+// ================= DASHBOARD EXTENSION =================
+const perfRoute10 = app._router.stack.find(r => r.route && r.route.path === '/performance');
+
+if(perfRoute10){
+  app.get("/performance",(req,res)=>{
+    let exp = computeExpectancy();
+
+    res.json({
+      botActive:BOT_ACTIVE,
+      capital,
+      pnl,
+      serverIP,
+      activeTradesCount:activeTrades.length,
+      scan:scanOutput,
+      activeTrades,
+      closedTrades,
+      shadowPnL,
+      strategyStats,
+      strategyAllocation,
+      exposure: getCurrentExposure(),
+      var: calculateVaR(),
+      latency: latencyStats.avgLatency,
+
+      // EDGE METRICS
+      expectancy: exp,
+      edge: edgeStatus()
+    });
+  });
+}
+
+// ================= END EXPECTANCY =================
