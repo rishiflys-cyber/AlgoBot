@@ -284,3 +284,137 @@ function updatePerf(p){
 }
 
 // ================= END FINAL BUILD =================
+
+
+// ================= FINAL EDGE OPTIMIZATION =================
+
+// SLIPPAGE CONTROL
+function getLimitPrice(price, type){
+  let buffer = price * 0.0005; // 0.05%
+  return type==="BUY" ? price + buffer : price - buffer;
+}
+
+// EXECUTION FILTER (SPREAD SIMULATION SAFE)
+function isSpreadHealthy(bid, ask){
+  if(!bid || !ask) return true;
+  return (ask - bid)/bid < 0.002; // <0.2%
+}
+
+// TRADE GAP CONTROL
+let lastTradeTime = {};
+function canTradeNow(symbol){
+  let now = Date.now();
+  if(!lastTradeTime[symbol]) return true;
+  return (now - lastTradeTime[symbol]) > 120000; // 2 min gap
+}
+
+// PORTFOLIO CAPITAL BALANCER
+function portfolioCap(qty, price){
+  let maxExposure = capital * 0.2; // 20% per trade max cap
+  let value = qty * price;
+  if(value > maxExposure){
+    return Math.floor(maxExposure / price);
+  }
+  return qty;
+}
+
+// PERFORMANCE LOGGING
+let tradeLog = [];
+function logTrade(symbol, pnl){
+  tradeLog.push({symbol, pnl, time: new Date()});
+  if(tradeLog.length > 100) tradeLog.shift();
+}
+
+// APPLY INTEGRATION NOTES:
+// 1. Before placing order:
+// if(!canTradeNow(s)) signal=null;
+
+// 2. After qty calc:
+// qty = portfolioCap(qty, price);
+
+// 3. Before order:
+// let limitPrice = getLimitPrice(price, signal);
+
+// 4. After trade close:
+// logTrade(t.symbol, profit*t.qty);
+// lastTradeTime[t.symbol] = Date.now();
+
+// ================= END EDGE =================
+
+
+// ================= DASHBOARD ANALYTICS + AUTO SCALING =================
+
+// PERFORMANCE METRICS
+let analytics = {
+  wins: 0,
+  losses: 0,
+  total: 0,
+  profit: 0,
+  loss: 0
+};
+
+function updateAnalytics(pnl){
+  analytics.total++;
+  if(pnl > 0){
+    analytics.wins++;
+    analytics.profit += pnl;
+  } else {
+    analytics.losses++;
+    analytics.loss += pnl;
+  }
+}
+
+function getAnalytics(){
+  let winRate = analytics.total ? (analytics.wins / analytics.total) : 0;
+  let avgWin = analytics.wins ? (analytics.profit / analytics.wins) : 0;
+  let avgLoss = analytics.losses ? (analytics.loss / analytics.losses) : 0;
+
+  return {
+    winRate,
+    avgWin,
+    avgLoss,
+    totalTrades: analytics.total
+  };
+}
+
+// AUTO CAPITAL SCALING
+function adaptiveRisk(){
+  let stats = getAnalytics();
+  let winRate = stats.winRate;
+
+  if(winRate > 0.65) return 0.05;
+  if(winRate > 0.55) return 0.04;
+  if(winRate > 0.5) return 0.03;
+  return 0.02;
+}
+
+// OVERRIDE POSITION SIZING (SAFE ADD)
+function scaledQty(price){
+  if(!capital) return 1;
+  let risk = capital * adaptiveRisk();
+  return Math.max(1, Math.floor(risk / price));
+}
+
+// ================= DASHBOARD EXTENSION =================
+// MODIFY /performance RESPONSE (add fields)
+
+const originalPerformance = app._router.stack.find(r => r.route && r.route.path === '/performance');
+
+if(originalPerformance){
+  app.get("/performance",(req,res)=>{
+    let stats = getAnalytics();
+    res.json({
+      botActive:BOT_ACTIVE,
+      capital,
+      pnl,
+      serverIP,
+      activeTradesCount:activeTrades.length,
+      scan:scanOutput,
+      activeTrades,
+      closedTrades,
+      analytics: stats
+    });
+  });
+}
+
+// ================= END UPGRADE =================
