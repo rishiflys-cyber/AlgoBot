@@ -1431,3 +1431,94 @@ if(perfRoute8){
 }
 
 // ================= END OVERLAY =================
+
+
+// ================= MULTI-BROKER + SMART ORDER ROUTING (SOR) =================
+
+// --- BROKER CONFIG ---
+let brokers = {
+  primary: kite,   // Zerodha
+  secondary: null  // placeholder (future broker)
+};
+
+// --- ROUTING LOGIC ---
+function selectBroker(latency){
+  try{
+    // simple rule: if latency high, fallback
+    if(latencyStats.avgLatency > 250 && brokers.secondary){
+      return brokers.secondary;
+    }
+    return brokers.primary;
+  }catch(e){
+    return brokers.primary;
+  }
+}
+
+// --- SMART ORDER ROUTING ---
+async function smartOrderRoute(orderParams){
+  let broker = selectBroker(latencyStats.avgLatency);
+
+  try{
+    let start = Date.now();
+
+    // use existing execution optimizer (slicing)
+    let slices = sliceOrder(orderParams.quantity);
+
+    for(let q of slices){
+      let params = {
+        ...orderParams,
+        quantity: q
+      };
+
+      await broker.placeOrder("regular", params);
+
+      await new Promise(res => setTimeout(res, 120));
+    }
+
+    trackLatency(start);
+
+  }catch(e){
+    console.log("SOR Error:", e.message);
+
+    // fallback retry
+    if(brokers.secondary){
+      try{
+        await brokers.secondary.placeOrder("regular", orderParams);
+      }catch(err){
+        console.log("Fallback failed:", err.message);
+      }
+    }
+  }
+}
+
+// ================= DASHBOARD EXTENSION =================
+const perfRoute9 = app._router.stack.find(r => r.route && r.route.path === '/performance');
+
+if(perfRoute9){
+  app.get("/performance",(req,res)=>{
+    res.json({
+      botActive:BOT_ACTIVE,
+      capital,
+      pnl,
+      serverIP,
+      activeTradesCount:activeTrades.length,
+      scan:scanOutput,
+      activeTrades,
+      closedTrades,
+      shadowPnL,
+      strategyStats,
+      strategyAllocation,
+      exposure: getCurrentExposure(),
+      var: calculateVaR(),
+      latency: latencyStats.avgLatency,
+
+      // SOR METRICS
+      routing: {
+        primary: "Zerodha",
+        secondary: brokers.secondary ? "Enabled" : "Not Configured"
+      }
+    });
+  });
+}
+
+// ================= END SOR =================
