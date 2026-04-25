@@ -341,3 +341,76 @@ for(let s of STOCKS){
 }
 
 // ================== END ACTIVATION ==================
+
+
+// ================== PORTFOLIO ALLOCATOR + CLUSTER CONTROL + IST TIME ==================
+
+// SECTOR MAP
+const sectorMap = {
+  RELIANCE:"ENERGY", TCS:"IT", INFY:"IT", HDFCBANK:"BANK", ICICIBANK:"BANK",
+  SBIN:"BANK", ITC:"FMCG", LT:"INFRA", AXISBANK:"BANK", KOTAKBANK:"BANK"
+};
+
+// sector exposure tracker
+let sectorExposure = {};
+
+// reset daily
+function resetExposure(){
+  sectorExposure = {};
+}
+
+// IST TIME
+function getIST(){
+  return new Date(new Date().toLocaleString("en-US",{timeZone:"Asia/Kolkata"}));
+}
+
+function isTradingTime(){
+  let t=getIST();
+  let m=t.getHours()*60+t.getMinutes();
+  return m>=560 && m<=885; // 9:20 to 14:45
+}
+
+function isSquareOff(){
+  let t=getIST();
+  let m=t.getHours()*60+t.getMinutes();
+  return m>=885;
+}
+
+// portfolio allocator
+function canAllocate(symbol){
+  let sector = sectorMap[symbol] || "OTHER";
+  let maxPerSector = 2;
+
+  if(!sectorExposure[sector]) sectorExposure[sector]=0;
+
+  if(sectorExposure[sector] >= maxPerSector){
+    return False;
+  }
+
+  return True;
+}
+
+// ================== INTEGRATION ==================
+
+// inside STOCK loop BEFORE order placement:
+// ADD:
+// if(!isTradingTime()) signal=null;
+
+// modify execution condition:
+/// if(signal && ...)
+/// becomes:
+
+/// if(signal && canAllocate(s) && ...)
+
+
+// after placing trade:
+/// sectorExposure[sectorMap[s]] = (sectorExposure[sectorMap[s]]||0)+1;
+
+
+// ================== SQUARE OFF ==================
+// inside activeTrades loop before SL/TP:
+
+// if(isSquareOff()){
+//   close trade immediately
+// }
+
