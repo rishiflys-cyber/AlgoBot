@@ -418,3 +418,82 @@ if(originalPerformance){
 }
 
 // ================= END UPGRADE =================
+
+
+// ================= SAFE TOP-3 + COMPLIANCE MODE + MARKET PROTECTION FIX =================
+
+// -------- COMPLIANCE MODE --------
+let AUTO_TRADING = false; // set true ONLY if allowed
+
+// -------- MARKET PROTECTION FIX --------
+// Zerodha rejects 0, so enforce minimum
+function safeMarketProtection(mp){
+  if(mp === undefined || mp <= 0) return 2; // minimum safe value
+  return mp;
+}
+
+// -------- TRADE REJECTION ENGINE --------
+function rejectTrade(s, price, history, volumeHistory, priceHistory){
+  try{
+    let priceChange = history[s]?.length > 1 
+      ? Math.abs(price - history[s][history[s].length - 2]) / price 
+      : 0;
+
+    let priceMovedTooFast = priceChange > 0.003;
+
+    let volArr = volumeHistory[s] || [];
+    let volSpike = volArr.length > 2 && volArr[volArr.length-1] > (2 * volArr[volArr.length - 2]);
+
+    let unstableMove = priceHistory[s] && priceHistory[s].length > 3 &&
+      Math.abs(price - priceHistory[s][priceHistory[s].length - 3]) / price > 0.004;
+
+    return priceMovedTooFast || volSpike || unstableMove;
+  }catch(e){
+    return true;
+  }
+}
+
+// -------- ENTRY PRECISION --------
+function entryCheck(signal, price, history, s){
+  let prevPrice = history[s]?.[history[s].length - 2];
+
+  if(signal === "BUY" && prevPrice && price < prevPrice) return false;
+  if(signal === "SELL" && prevPrice && price > prevPrice) return false;
+
+  return true;
+}
+
+// -------- DRAWDOWN ADAPTATION --------
+let peakCapital = 0;
+
+function getDrawdown(capital){
+  if(capital > peakCapital) peakCapital = capital;
+  return peakCapital > 0 ? (peakCapital - capital) / peakCapital : 0;
+}
+
+function adjustedRisk(baseRisk, capital){
+  let dd = getDrawdown(capital);
+
+  if(dd > 0.02) return baseRisk * 0.5;
+  if(dd > 0.01) return baseRisk * 0.75;
+
+  return baseRisk;
+}
+
+// ================= INTEGRATION NOTES =================
+// 1. BEFORE placing trade:
+// if(rejectTrade(s, price, history, volumeHistory, priceHistory)) signal=null;
+
+// 2. ENTRY FILTER:
+// if(!entryCheck(signal, price, history, s)) signal=null;
+
+// 3. POSITION SIZING:
+// let risk = adjustedRisk(pr >=0.6 ? 0.05 : 0.02, capital);
+
+// 4. COMPLIANCE:
+// if(!AUTO_TRADING) signal=null;
+
+// 5. ORDER:
+// market_protection: safeMarketProtection(0)
+
+// ================= END PATCH =================
