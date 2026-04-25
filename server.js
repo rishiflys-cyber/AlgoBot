@@ -414,3 +414,60 @@ function canAllocate(symbol){
 //   close trade immediately
 // }
 
+
+
+// ================== AI ADAPTIVE INTELLIGENCE LAYER ==================
+
+// PERFORMANCE TRACKER
+let strategyStats = {
+  wins: 0,
+  losses: 0,
+  total: 0
+};
+
+// ADAPTIVE THRESHOLDS
+let adaptiveConfig = {
+  minQuality: 65,
+  minProb: 0.5
+};
+
+// UPDATE PERFORMANCE
+function updatePerformance(pnl){
+  strategyStats.total += 1;
+  if(pnl > 0) strategyStats.wins +=1;
+  else strategyStats.losses +=1;
+
+  let winRate = strategyStats.wins / strategyStats.total;
+
+  // ADAPT LOGIC
+  if(winRate < 0.5){
+    adaptiveConfig.minQuality = Math.min(80, adaptiveConfig.minQuality + 2);
+    adaptiveConfig.minProb = Math.min(0.6, adaptiveConfig.minProb + 0.02);
+  } else if(winRate > 0.65){
+    adaptiveConfig.minQuality = Math.max(60, adaptiveConfig.minQuality - 1);
+    adaptiveConfig.minProb = Math.max(0.5, adaptiveConfig.minProb - 0.01);
+  }
+}
+
+// MODIFY SIGNAL FILTER (INTEGRATION POINT)
+// Replace:
+// if(tradeQualityScore < 65) signal=null;
+
+// WITH:
+// if(tradeQualityScore < adaptiveConfig.minQuality || pr < adaptiveConfig.minProb) signal=null;
+
+
+// HOOK INTO TRADE CLOSE
+// After closedTrades.push(...)
+updatePerformance(profit * t.qty);
+
+
+// DEBUG LOG (OPTIONAL)
+function getAIStats(){
+  return {
+    winRate: strategyStats.total ? strategyStats.wins/strategyStats.total : 0,
+    config: adaptiveConfig
+  };
+}
+
+// ================== END AI LAYER ==================
