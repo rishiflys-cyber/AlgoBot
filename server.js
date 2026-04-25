@@ -240,41 +240,47 @@ app.get("/performance",(req,res)=>{
 app.listen(process.env.PORT||3000);
 
 
-// ================= STABILITY + SAFE INTEGRATION LAYER =================
+// ================= FINAL INSTITUTIONAL BUILD (SAFE INTEGRATION) =================
 
-// GLOBAL SAFETY HANDLERS
-process.on("uncaughtException", (err) => {
-  console.error("UNCAUGHT:", err);
-});
-process.on("unhandledRejection", (err) => {
-  console.error("UNHANDLED:", err);
-});
+// SAFETY
+process.on("uncaughtException", e=>console.error("UNCAUGHT:",e));
+process.on("unhandledRejection", e=>console.error("UNHANDLED:",e));
 
-// SAFE STATE
-let priceHistory = {};
-let volatilityMap = {};
-let lossTracker = {};
-let sectorExposure = {};
+// STATE
+let priceHistory={}, volatilityMap={}, lossTracker={}, sectorExposure={}, mtfHistory={};
+let adaptiveConfig={minQuality:65,minProb:0.5};
+let stats={wins:0,losses:0,total:0};
 
 // IST TIME
-function getIST(){
-  return new Date(new Date().toLocaleString("en-US",{timeZone:"Asia/Kolkata"}));
-}
-function isTradingTime(){
-  let t=getIST();
-  let m=t.getHours()*60+t.getMinutes();
-  return m>=560 && m<=885;
-}
-function isSquareOff(){
-  let t=getIST();
-  let m=t.getHours()*60+t.getMinutes();
-  return m>=885;
-}
+function ist(){return new Date(new Date().toLocaleString("en-US",{timeZone:"Asia/Kolkata"}));}
+function isTrading(){let t=ist();let m=t.getHours()*60+t.getMinutes();return m>=560&&m<=885;}
+function isSquare(){let t=ist();let m=t.getHours()*60+t.getMinutes();return m>=885;}
 
 // SAFE AVG
-function safeAvg(arr, fallback){
-  if(!arr || arr.length===0) return fallback;
-  return arr.reduce((a,b)=>a+b,0)/arr.length;
+function avg(a,f){return (!a||!a.length)?f:a.reduce((x,y)=>x+y,0)/a.length;}
+
+// MTF
+function updateMTF(s,p){
+ if(!mtfHistory[s]) mtfHistory[s]={m1:[],m5:[]};
+ mtfHistory[s].m1.push(p); if(mtfHistory[s].m1.length>20) mtfHistory[s].m1.shift();
+ mtfHistory[s].m5.push(p); if(mtfHistory[s].m5.length>100) mtfHistory[s].m5.shift();
+}
+function trend(a){
+ if(a.length<5) return "NA";
+ let u=0; for(let i=1;i<a.length;i++) if(a[i]>a[i-1]) u++;
+ return u>=a.length/2?"UP":"DOWN";
 }
 
-// ================= END STABLE BASE =================
+// SECTOR
+const sectorMap={RELIANCE:"ENERGY",TCS:"IT",INFY:"IT",HDFCBANK:"BANK",ICICIBANK:"BANK",SBIN:"BANK",ITC:"FMCG",LT:"INFRA",AXISBANK:"BANK",KOTAKBANK:"BANK"};
+
+// AI
+function updatePerf(p){
+ stats.total++;
+ if(p>0) stats.wins++; else stats.losses++;
+ let wr=stats.wins/(stats.total||1);
+ if(wr<0.5){adaptiveConfig.minQuality=Math.min(80,adaptiveConfig.minQuality+2);adaptiveConfig.minProb=Math.min(0.6,adaptiveConfig.minProb+0.02);}
+ else if(wr>0.65){adaptiveConfig.minQuality=Math.max(60,adaptiveConfig.minQuality-1);adaptiveConfig.minProb=Math.max(0.5,adaptiveConfig.minProb-0.01);}
+}
+
+// ================= END FINAL BUILD =================
