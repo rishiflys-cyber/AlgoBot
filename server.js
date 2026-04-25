@@ -1683,3 +1683,100 @@ if(perfRoute11){
 }
 
 // ================= END AUTO SCALING =================
+
+
+// ================= WEEKLY PERFORMANCE REPORT + AUTO TUNING SUMMARY =================
+
+// store weekly snapshots
+let weeklyReport = [];
+
+// helper: get week number
+function getWeekKey(){
+  let d = new Date();
+  let onejan = new Date(d.getFullYear(),0,1);
+  let week = Math.ceil((((d - onejan) / 86400000) + onejan.getDay()+1)/7);
+  return `${d.getFullYear()}-W${week}`;
+}
+
+// aggregate weekly data
+function updateWeeklyReport(){
+  try{
+    let key = getWeekKey();
+    let existing = weeklyReport.find(w => w.week === key);
+
+    let exp = computeExpectancy() || {};
+
+    if(!existing){
+      weeklyReport.push({
+        week: key,
+        pnl,
+        trades: tradeStats.total,
+        winRate: exp.winRate || 0,
+        expectancy: exp.expectancy || 0
+      });
+    } else {
+      existing.pnl = pnl;
+      existing.trades = tradeStats.total;
+      existing.winRate = exp.winRate || 0;
+      existing.expectancy = exp.expectancy || 0;
+    }
+
+    // keep last 12 weeks
+    if(weeklyReport.length > 12) weeklyReport.shift();
+
+  }catch(e){
+    console.log("Weekly report error:", e.message);
+  }
+}
+
+// auto tuning summary
+function tuningSummary(){
+  let exp = computeExpectancy();
+  if(!exp) return "NO_DATA";
+
+  if(exp.expectancy > 0 && exp.winRate > 0.6){
+    return "SYSTEM STRONG → consider scaling capital";
+  }
+
+  if(exp.expectancy > 0){
+    return "SYSTEM STABLE → maintain settings";
+  }
+
+  return "SYSTEM WEAK → tighten filters / reduce risk";
+}
+
+// ================= DASHBOARD EXTENSION =================
+const perfRoute12 = app._router.stack.find(r => r.route && r.route.path === '/performance');
+
+if(perfRoute12){
+  app.get("/performance",(req,res)=>{
+    let exp = computeExpectancy();
+
+    res.json({
+      botActive:BOT_ACTIVE,
+      capital,
+      pnl,
+      serverIP,
+      activeTradesCount:activeTrades.length,
+      scan:scanOutput,
+      activeTrades,
+      closedTrades,
+      shadowPnL,
+      strategyStats,
+      strategyAllocation,
+      exposure: getCurrentExposure(),
+      var: calculateVaR(),
+      latency: latencyStats.avgLatency,
+
+      expectancy: exp,
+      edge: edgeStatus(),
+      riskMultiplier: expectancyRiskMultiplier(),
+
+      // NEW REPORTING
+      weeklyReport,
+      tuning: tuningSummary()
+    });
+  });
+}
+
+// ================= END WEEKLY REPORT =================
