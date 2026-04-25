@@ -1234,3 +1234,97 @@ if(perfRoute6){
 }
 
 // ================= END EXECUTION OPTIMIZATION =================
+
+
+// ================= MARKET MICROSTRUCTURE EDGE (ORDER BOOK + LIQUIDITY) =================
+
+// --- ORDER BOOK ANALYSIS (using quote depth if available) ---
+function analyzeOrderBook(depth){
+  try{
+    if(!depth || !depth.buy || !depth.sell) return null;
+
+    let bidVol = depth.buy.reduce((a,b)=>a+b.quantity,0);
+    let askVol = depth.sell.reduce((a,b)=>a+b.quantity,0);
+
+    let imbalance = (bidVol - askVol) / (bidVol + askVol);
+
+    return {
+      bidVol,
+      askVol,
+      imbalance
+    };
+  }catch(e){
+    return null;
+  }
+}
+
+// --- LIQUIDITY FILTER ---
+function liquidityCheck(depth){
+  let ob = analyzeOrderBook(depth);
+  if(!ob) return true;
+
+  // Avoid thin liquidity
+  let total = ob.bidVol + ob.askVol;
+  if(total < 10000) return false;
+
+  return true;
+}
+
+// --- MICROSTRUCTURE SIGNAL BOOST ---
+function microstructureBias(signal, depth){
+  let ob = analyzeOrderBook(depth);
+  if(!ob) return signal;
+
+  // If strong bid dominance → favor BUY
+  if(ob.imbalance > 0.2 && signal === "BUY") return "BUY";
+
+  // If strong ask dominance → favor SELL
+  if(ob.imbalance < -0.2 && signal === "SELL") return "SELL";
+
+  // Weak alignment → cancel
+  if(Math.abs(ob.imbalance) < 0.05){
+    return null;
+  }
+
+  return signal;
+}
+
+// --- FINAL MICROSTRUCTURE GATE ---
+function microstructureGate(signal, depth){
+  if(!signal) return null;
+
+  if(!liquidityCheck(depth)){
+    return null;
+  }
+
+  return microstructureBias(signal, depth);
+}
+
+// ================= DASHBOARD EXTENSION =================
+const perfRoute7 = app._router.stack.find(r => r.route && r.route.path === '/performance');
+
+if(perfRoute7){
+  app.get("/performance",(req,res)=>{
+    res.json({
+      botActive:BOT_ACTIVE,
+      capital,
+      pnl,
+      serverIP,
+      activeTradesCount:activeTrades.length,
+      scan:scanOutput,
+      activeTrades,
+      closedTrades,
+      shadowPnL,
+      strategyStats,
+      strategyAllocation,
+      exposure: getCurrentExposure(),
+      var: calculateVaR(),
+      latency: latencyStats.avgLatency,
+
+      // MICROSTRUCTURE (last snapshot example)
+      microstructure: "enabled"
+    });
+  });
+}
+
+// ================= END MICROSTRUCTURE =================
