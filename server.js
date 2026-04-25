@@ -18,9 +18,6 @@ let history={};
 let volumeHistory={};
 let scanOutput=[];
 let serverIP="UNKNOWN";
-let volatilityMap={};
-let priceHistory={};
-let lossTracker={};
 
 // GET SERVER IP
 async function updateIP(){
@@ -60,7 +57,7 @@ function getIndexTrend(){
 // VOLUME BREAKOUT
 function volumeBreakout(symbol, vol){
  if(!volumeHistory[symbol]) return false;
- let avg = (volumeHistory[symbol] && volumeHistory[symbol].length>0) ? volumeHistory[symbol].reduce((a,b)=>a+b,0)/volumeHistory[symbol].length : vol || 1;
+ let avg = volumeHistory[symbol].reduce((a,b)=>a+b,0)/volumeHistory[symbol].length;
  return vol > avg * 1.5;
 }
 
@@ -141,21 +138,6 @@ setInterval(async()=>{
     if(!history[s]) history[s]=[];
     history[s].push(price);
     if(history[s].length>6) history[s].shift();
-    // VOLATILITY
-    if(!priceHistory[s]) priceHistory[s]=[];
-    priceHistory[s].push(price);
-    if(priceHistory[s].length>20) priceHistory[s].shift();
-
-    let volatility=0;
-    if(priceHistory[s].length>5){
-      let moves=[];
-      for(let i=1;i<priceHistory[s].length;i++){
-        moves.push(Math.abs(priceHistory[s][i]-priceHistory[s][i-1]));
-      }
-      volatility = moves.reduce((a,b)=>a+b,0)/moves.length;
-    }
-    volatilityMap[s]=volatility;
-
 
     if(!volumeHistory[s]) volumeHistory[s]=[];
     volumeHistory[s].push(vol);
@@ -216,12 +198,8 @@ setInterval(async()=>{
     if(!cp) continue;
 
     let profit=t.type==="BUY"?(cp-t.entry):(t.entry-cp);
-    let vol = volatilityMap[t.symbol] || 0;
-    let volPercent = t.entry ? (vol/t.entry):0;
-    let slPercent = Math.max(volPercent*1.2,0.0015);
-    let tpPercent = slPercent*1.5;
 
-    if(profit > t.entry*tpPercent || profit < -t.entry*slPercent){
+    if(profit>t.entry*0.003 || profit<-t.entry*0.002){
       await kite.placeOrder("regular",{
         exchange:"NSE",
         tradingsymbol:t.symbol,
@@ -232,12 +210,6 @@ setInterval(async()=>{
       });
 
       closedTrades.push(profit*t.qty);
-      if(!lossTracker[t.symbol]) lossTracker[t.symbol]={consecutive:0,cooldown:0};
-      if(profit<0){ lossTracker[t.symbol].consecutive+=1;} else {lossTracker[t.symbol].consecutive=0;}
-      if(lossTracker[t.symbol].consecutive>=2){
-        lossTracker[t.symbol].cooldown=Date.now()+5*60*1000;
-      }
-
     } else {
       unreal+=profit*t.qty;
       remaining.push(t);
@@ -268,206 +240,41 @@ app.get("/performance",(req,res)=>{
 app.listen(process.env.PORT||3000);
 
 
-// ================== MTF + RANKING ACTIVATION (NON-BREAKING) ==================
+// ================= STABILITY + SAFE INTEGRATION LAYER =================
 
-// --- MTF STORAGE ---
-let mtfHistory = {};
+// GLOBAL SAFETY HANDLERS
+process.on("uncaughtException", (err) => {
+  console.error("UNCAUGHT:", err);
+});
+process.on("unhandledRejection", (err) => {
+  console.error("UNHANDLED:", err);
+});
 
-// helper to update MTF
-function updateMTF(symbol, price){
-  if(!mtfHistory[symbol]) mtfHistory[symbol]={m1:[], m5:[]};
-
-  mtfHistory[symbol].m1.push(price);
-  if(mtfHistory[symbol].m1.length>20) mtfHistory[symbol].m1.shift();
-
-  mtfHistory[symbol].m5.push(price);
-  if(mtfHistory[symbol].m5.length>100) mtfHistory[symbol].m5.shift();
-}
-
-// helper to get trend
-function getMTFTrend(arr){
-  if(arr.length<5) return "UNKNOWN";
-  let up=0;
-  for(let i=1;i<arr.length;i++){
-    if(arr[i]>arr[i-1]) up++;
-  }
-  return up >= arr.length/2 ? "UP":"DOWN";
-}
-
-// ranking function
-function rankCandidates(scan){
-  return scan
-    .filter(x=>x.signal)
-    .sort((a,b)=> (b.tradeQualityScore||0)-(a.tradeQualityScore||0))
-    .slice(0,5)
-    .map(x=>x.symbol);
-}
-
-// ================== INTEGRATION HOOK ==================
-// NOTE: Place inside main loop AFTER scanOutput is built
-
-let topSymbols = rankCandidates(scanOutput);
-
-for(let s of STOCKS){
-
-  if(!topSymbols.includes(s)) continue;
-
-  // MTF update
-  let data = quotes["NSE:"+s];
-  if(!data) continue;
-
-  let price = data.last_price;
-  updateMTF(s, price);
-
-  let m1Trend = getMTFTrend(mtfHistory[s].m1);
-  let m5Trend = getMTFTrend(mtfHistory[s].m5);
-
-  let mtfAligned = (
-    (m1Trend==="UP" && m5Trend!=="DOWN") ||
-    (m1Trend==="DOWN" && m5Trend!=="UP")
-  );
-
-  if(!mtfAligned){
-    continue; // skip trade
-  }
-
-  // enhanced qty (fallback safe)
-  let scoreObj = scanOutput.find(x=>x.symbol===s);
-  let score = scoreObj?.tradeQualityScore || 60;
-
-  let qty = dynamicQty(price, score/100);
-
-  // original execution continues unchanged
-}
-
-// ================== END ACTIVATION ==================
-
-
-// ================== PORTFOLIO ALLOCATOR + CLUSTER CONTROL + IST TIME ==================
-
-// SECTOR MAP
-const sectorMap = {
-  RELIANCE:"ENERGY", TCS:"IT", INFY:"IT", HDFCBANK:"BANK", ICICIBANK:"BANK",
-  SBIN:"BANK", ITC:"FMCG", LT:"INFRA", AXISBANK:"BANK", KOTAKBANK:"BANK"
-};
-
-// sector exposure tracker
+// SAFE STATE
+let priceHistory = {};
+let volatilityMap = {};
+let lossTracker = {};
 let sectorExposure = {};
-
-// reset daily
-function resetExposure(){
-  sectorExposure = {};
-}
 
 // IST TIME
 function getIST(){
   return new Date(new Date().toLocaleString("en-US",{timeZone:"Asia/Kolkata"}));
 }
-
 function isTradingTime(){
   let t=getIST();
   let m=t.getHours()*60+t.getMinutes();
-  return m>=560 && m<=885; // 9:20 to 14:45
+  return m>=560 && m<=885;
 }
-
 function isSquareOff(){
   let t=getIST();
   let m=t.getHours()*60+t.getMinutes();
   return m>=885;
 }
 
-// portfolio allocator
-function canAllocate(symbol){
-  let sector = sectorMap[symbol] || "OTHER";
-  let maxPerSector = 2;
-
-  if(!sectorExposure[sector]) sectorExposure[sector]=0;
-
-  if(sectorExposure[sector] >= maxPerSector){
-    return False;
-  }
-
-  return True;
+// SAFE AVG
+function safeAvg(arr, fallback){
+  if(!arr || arr.length===0) return fallback;
+  return arr.reduce((a,b)=>a+b,0)/arr.length;
 }
 
-// ================== INTEGRATION ==================
-
-// inside STOCK loop BEFORE order placement:
-// ADD:
-// if(!isTradingTime()) signal=null;
-
-// modify execution condition:
-/// if(signal && ...)
-/// becomes:
-
-/// if(signal && canAllocate(s) && ...)
-
-
-// after placing trade:
-/// sectorExposure[sectorMap[s]] = (sectorExposure[sectorMap[s]]||0)+1;
-
-
-// ================== SQUARE OFF ==================
-// inside activeTrades loop before SL/TP:
-
-// if(isSquareOff()){
-//   close trade immediately
-// }
-
-
-
-// ================== AI ADAPTIVE INTELLIGENCE LAYER ==================
-
-// PERFORMANCE TRACKER
-let strategyStats = {
-  wins: 0,
-  losses: 0,
-  total: 0
-};
-
-// ADAPTIVE THRESHOLDS
-let adaptiveConfig = {
-  minQuality: 65,
-  minProb: 0.5
-};
-
-// UPDATE PERFORMANCE
-function updatePerformance(pnl){
-  strategyStats.total += 1;
-  if(pnl > 0) strategyStats.wins +=1;
-  else strategyStats.losses +=1;
-
-  let winRate = strategyStats.wins / strategyStats.total;
-
-  // ADAPT LOGIC
-  if(winRate < 0.5){
-    adaptiveConfig.minQuality = Math.min(80, adaptiveConfig.minQuality + 2);
-    adaptiveConfig.minProb = Math.min(0.6, adaptiveConfig.minProb + 0.02);
-  } else if(winRate > 0.65){
-    adaptiveConfig.minQuality = Math.max(60, adaptiveConfig.minQuality - 1);
-    adaptiveConfig.minProb = Math.max(0.5, adaptiveConfig.minProb - 0.01);
-  }
-}
-
-// MODIFY SIGNAL FILTER (INTEGRATION POINT)
-// Replace:
-// if(tradeQualityScore < 65) signal=null;
-
-// WITH:
-// if(tradeQualityScore < adaptiveConfig.minQuality || pr < adaptiveConfig.minProb) signal=null;
-
-
-// HOOK INTO TRADE CLOSE
-// After closedTrades.push(...)
-updatePerformance(profit * t.qty);
-
-
-// DEBUG LOG (OPTIONAL)
-function getAIStats(){
-  return {
-    winRate: strategyStats.total ? strategyStats.wins/strategyStats.total : 0,
-    config: adaptiveConfig
-  };
-}
-
-// ================== END AI LAYER ==================
+// ================= END STABLE BASE =================
