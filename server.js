@@ -192,14 +192,19 @@ setInterval(async()=>{
     let momentum=pr>=0.5;
     let indexAlign=indexTrend==="UP"||indexTrend==="DOWN";
 
-    let agreement=[momentum,volBreak,indexAlign].filter(x=>x).length;
+    let agreement = [momentum, volBreak, indexAlign].filter(x => x).length;
 
-    let quality=tradeQualityScore(pr,volBreak,agreement);
+let quality = tradeQualityScore(pr, volBreak, agreement);
 
-    let signal=null;
-    if(agreement>=2 && pr>=0.5){
-      signal=indexTrend==="UP"?"BUY":"SELL";
-    }
+let signal = null;
+
+if (
+  agreement >= 2 &&
+  pr >= 0.5 &&
+  quality >= 65
+){
+  signal = indexTrend === "UP" ? "BUY" : "SELL";
+}
 
     scanOutput.push({
       symbol:s,price,probability:pr,volume:vol,
