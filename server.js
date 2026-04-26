@@ -1,4 +1,4 @@
-// STEP 2: MARKET REGIME ENGINE ADDED (NO DOWNGRADE)
+// STEP 3: EXECUTION + RISK STABILIZATION (NO DOWNGRADE)
 
 require("dotenv").config();
 const express = require("express");
@@ -53,16 +53,33 @@ function tradeQualityScore(pr, volBreak, agreement){
  return Math.min(100,(pr*40)+(volBreak?30:10)+(agreement*10));
 }
 
-// 🔥 STEP 2 ADDITION — REGIME ENGINE
 function detectRegime(prices){
  if(prices.length<5) return "NORMAL";
  let max=Math.max(...prices);
  let min=Math.min(...prices);
  let range=(max-min)/min;
-
  if(range<0.002) return "SIDEWAYS";
  if(range>0.01) return "VOLATILE";
  return "NORMAL";
+}
+
+// 🔥 STEP 3 ADDITIONS
+
+function riskGate(price, qty){
+ let exposure = activeTrades.reduce((a,t)=>a+(t.entry*t.qty),0);
+ return (exposure + price*qty) <= capital*0.6;
+}
+
+function positionSize(price, pr){
+ let riskPct = pr >= 0.6 ? 0.03 : 0.02;
+ return Math.max(1, Math.floor((capital * riskPct) / price));
+}
+
+function entryCheck(signal, price, hist){
+ let prev = hist[hist.length-2];
+ if(!prev) return true;
+ if(signal==="BUY" && price < prev) return false;
+ return true;
 }
 
 // STOCKS
@@ -75,7 +92,6 @@ setInterval(async()=>{
  try{
   await updateCapital();
 
-  // INDEX TRACKING
   const idxData = await kite.getLTP(["NSE:NIFTY 50"]);
   let idxPrice = idxData["NSE:NIFTY 50"]?.last_price;
   if(idxPrice){
@@ -113,7 +129,6 @@ setInterval(async()=>{
 
     let signal=null;
 
-    // 🔥 REGIME FILTER APPLIED
     if(
       regime!=="SIDEWAYS" &&
       agreement>=1 &&
@@ -127,15 +142,20 @@ setInterval(async()=>{
       symbol:s,
       price,
       probability:pr,
-      volume:vol,
       regime,
       agreement,
       quality,
       signal
     });
 
+    // 🔥 EXECUTION FILTERS APPLIED
     if(signal && !activeTrades.find(t=>t.symbol===s)){
-      let qty=Math.max(1,Math.floor((capital*0.02)/price));
+
+      if(!entryCheck(signal, price, history[s])) continue;
+
+      let qty = positionSize(price, pr);
+
+      if(!riskGate(price, qty)) continue;
 
       await kite.placeOrder("regular",{
         exchange:"NSE",
