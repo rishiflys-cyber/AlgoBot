@@ -24,6 +24,7 @@ const STOCKS = ["NSE:RELIANCE","NSE:TCS","NSE:INFY","NSE:HDFCBANK","NSE:ICICIBAN
 
 let state = {
   capital: 0,
+  pnl: 0,
   activeTrades: [],
   closedTrades: [],
   serverIP: null,
@@ -31,6 +32,8 @@ let state = {
 };
 
 let lastPrice = {};
+let lastTradeTime = {};
+const COOLDOWN = 300000;
 
 // LOGIN
 app.get('/login', (req,res)=>res.redirect(kite.getLoginURL()));
@@ -51,17 +54,11 @@ app.get('/redirect', async (req,res)=>{
   }
 });
 
-// CAPITAL FIXED
+// CAPITAL
 async function updateCapital(){
   try{
     const m = await kite.getMargins();
-    console.log("MARGINS:", m);
-
-    state.capital =
-      m?.equity?.available?.cash ||
-      m?.equity?.net ||
-      state.capital;
-
+    state.capital = m?.equity?.available?.cash || m?.equity?.net || state.capital;
   }catch(e){
     console.log("MARGIN ERROR:", e.message);
   }
@@ -96,49 +93,67 @@ async function executeOrder(symbol, qty, side){
 setInterval(async ()=>{
   if(!accessToken) return;
 
+  if(state.pnl < -200) return; // kill switch
+
   await updateCapital();
 
   const quotes = await kite.getQuote(STOCKS);
-
-  let signals=[];
 
   for(const sym of STOCKS){
     const q = quotes[sym];
     if(!q) continue;
 
     const price = q.last_price;
+
+    // trend filter
+    if (price < q.ohlc.open) continue;
+
+    // cooldown
+    if (lastTradeTime[sym] && Date.now() - lastTradeTime[sym] < COOLDOWN) continue;
+
     const score = getScore(price, lastPrice[sym]);
     lastPrice[sym]=price;
 
-    if(score>=2){
-      signals.push({sym, score, price});
-    }
-  }
+    if(score < 3) continue;
 
-  signals.sort((a,b)=>b.score-a.score);
+    if(state.activeTrades.length >= 2) break;
 
-  for(const s of signals){
-    if(state.activeTrades.length>=2) break;
-
-    const qty = Math.max(1, Math.floor((state.capital*0.02)/s.price));
+    const qty = Math.max(1, Math.floor((state.capital * 0.01) / price));
     if(qty <= 0) continue;
 
-    await executeOrder(s.sym, qty, "BUY");
+    const volatility = price * 0.003;
+
+    await executeOrder(sym, qty, "BUY");
+
+    lastTradeTime[sym] = Date.now();
 
     state.activeTrades.push({
-      symbol:s.sym,
-      entry:s.price,
+      symbol:sym,
+      entry:price,
       qty,
-      sl:s.price*0.995,
-      target:s.price*1.015
+      sl:price - volatility,
+      target:price + (volatility*2),
+      entryTime: Date.now(),
+      score
     });
   }
 
+  // exits
   state.activeTrades = state.activeTrades.filter(tr=>{
     const cp = lastPrice[tr.symbol];
-    if(cp>=tr.target || cp<=tr.sl){
+    if(cp >= tr.target || cp <= tr.sl){
+      const pnl = (cp - tr.entry) * tr.qty;
+      state.pnl += pnl;
+
       executeOrder(tr.symbol, tr.qty, "SELL");
-      state.closedTrades.push(tr);
+
+      state.closedTrades.push({
+        ...tr,
+        exit: cp,
+        pnl,
+        exitTime: Date.now()
+      });
+
       return false;
     }
     return true;
@@ -150,4 +165,4 @@ setInterval(async ()=>{
 app.get('/', (req,res)=>res.json(state));
 app.get('/performance', (req,res)=>res.json(state));
 
-app.listen(PORT, ()=>console.log("FINAL V13 RUNNING"));
+app.listen(PORT, ()=>console.log("PROFIT OPTIMIZED V14 RUNNING"));
