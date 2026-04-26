@@ -23,108 +23,80 @@ function loadCSV(path) {
 }
 
 // ===== STRATEGIES =====
+function momentum(prev, curr) { return curr.close > prev.close ? 1 : 0; }
+function volume(prev, curr) { return curr.volume > prev.volume * 1.2 ? 1 : 0; }
+function volatility(prev, curr) { return (curr.high - curr.low) > (prev.high - prev.low) ? 1 : 0; }
 
-// 1. Momentum
-function momentumStrategy(prev, curr) {
-  return curr.close > prev.close ? 1 : 0;
-}
-
-// 2. Moving Average
-function maStrategy(data, i) {
-  if (i < 5) return 0;
-  const ma = (data[i-1].close + data[i-2].close + data[i-3].close + data[i-4].close + data[i-5].close) / 5;
-  return data[i].close > ma ? 1 : 0;
-}
-
-// 3. Volume Breakout
-function volumeStrategy(prev, curr) {
-  return curr.volume > prev.volume * 1.2 ? 1 : 0;
-}
-
-// 4. Volatility Expansion
-function volatilityStrategy(prev, curr) {
-  return (curr.high - curr.low) > (prev.high - prev.low) ? 1 : 0;
-}
-
-// ===== ENSEMBLE =====
-function ensembleStrategy(data) {
+// ===== RUN STRATEGY =====
+function runStrategy(data, type) {
   let pnl = 0;
   let trades = [];
 
-  for (let i = 6; i < data.length; i++) {
+  for (let i = 1; i < data.length; i++) {
     const prev = data[i-1];
     const curr = data[i];
 
-    const signals = [
-      momentumStrategy(prev, curr),
-      maStrategy(data, i),
-      volumeStrategy(prev, curr),
-      volatilityStrategy(prev, curr)
-    ];
+    let signal = 0;
+    if (type === "momentum") signal = momentum(prev, curr);
+    if (type === "volume") signal = volume(prev, curr);
+    if (type === "volatility") signal = volatility(prev, curr);
 
-    const score = signals.reduce((a,b)=>a+b,0);
-
-    // require 3/4 agreement
-    if (score >= 3) {
-      const entry = curr.close;
-      const target = entry * 1.01;
-      const stop = entry * 0.995;
-
-      let exit = entry;
-
-      for (let j = i+1; j < data.length; j++) {
-        if (data[j].high >= target) { exit = target; break; }
-        if (data[j].low <= stop) { exit = stop; break; }
-      }
-
-      const tradePnl = exit - entry;
+    if (signal) {
+      const tradePnl = curr.close - prev.close;
       pnl += tradePnl;
-
-      trades.push({
-        date: curr.date,
-        score,
-        entry,
-        exit,
-        pnl: tradePnl
-      });
+      trades.push(tradePnl);
     }
   }
 
-  return { pnl, trades };
+  const wins = trades.filter(t => t > 0).length;
+
+  return {
+    pnl,
+    winRate: trades.length ? wins / trades.length : 0,
+    trades: trades.length
+  };
+}
+
+// ===== CAPITAL ALLOCATION =====
+function allocateCapital(results) {
+  const totalScore = results.reduce((a,b)=>a + Math.max(b.pnl,0), 0) || 1;
+
+  return results.map(r => ({
+    strategy: r.name,
+    weight: Math.max(r.pnl,0) / totalScore
+  }));
 }
 
 // ===== RUN =====
-let results = {};
+let output = {};
 try {
   const data = loadCSV('./data.csv');
-  results = ensembleStrategy(data);
+
+  const strategies = [
+    { name: "momentum", res: runStrategy(data, "momentum") },
+    { name: "volume", res: runStrategy(data, "volume") },
+    { name: "volatility", res: runStrategy(data, "volatility") }
+  ];
+
+  const enriched = strategies.map(s => ({
+    name: s.name,
+    ...s.res
+  }));
+
+  const allocation = allocateCapital(enriched);
+
+  output = {
+    strategies: enriched,
+    allocation
+  };
+
 } catch (e) {
   console.log("Upload data.csv");
 }
 
-// ===== METRICS =====
-function metrics(trades) {
-  if (!trades || trades.length === 0) return {};
-
-  const wins = trades.filter(t => t.pnl > 0).length;
-
-  return {
-    totalTrades: trades.length,
-    winRate: wins / trades.length,
-    avgPnL: trades.reduce((a,b)=>a+b.pnl,0)/trades.length
-  };
-}
-
 // ===== ROUTES =====
 app.get('/', (req, res) => {
-  res.json({
-    totalPnL: results.pnl || 0,
-    ...metrics(results.trades)
-  });
+  res.json(output);
 });
 
-app.get('/trades', (req, res) => {
-  res.json(results.trades || []);
-});
-
-app.listen(PORT, () => console.log("Ensemble Engine Running"));
+app.listen(PORT, () => console.log("Portfolio Optimizer Running"));

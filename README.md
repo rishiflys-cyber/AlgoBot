@@ -1,14 +1,6 @@
 
-MULTI-STRATEGY ENSEMBLE ENGINE
+PORTFOLIO OF STRATEGIES + CAPITAL ALLOCATION OPTIMIZER
 
-- Combines 4 strategies:
-  Momentum
-  Moving Average
-  Volume Breakout
-  Volatility Expansion
-
-- Requires 3/4 agreement
-- Includes SL/TP
-- Outputs metrics
-
-Use with data.csv
+- Runs multiple strategies
+- Evaluates PnL + win rate
+- Allocates capital dynamically based on performance
