@@ -1,10 +1,14 @@
 
-STRATEGY REFINEMENT ENGINE
+MULTI-STRATEGY ENSEMBLE ENGINE
 
-Enhancements:
-- Moving average trend filter
-- Volume spike confirmation
-- Target + Stop-loss logic
-- Trade metrics (win rate, avg pnl)
+- Combines 4 strategies:
+  Momentum
+  Moving Average
+  Volume Breakout
+  Volatility Expansion
 
-Use with data.csv for real evaluation.
+- Requires 3/4 agreement
+- Includes SL/TP
+- Outputs metrics
+
+Use with data.csv

@@ -22,49 +22,70 @@ function loadCSV(path) {
   }).filter(d => !isNaN(d.close));
 }
 
-// ===== IMPROVED STRATEGY =====
-function refinedStrategy(data) {
+// ===== STRATEGIES =====
+
+// 1. Momentum
+function momentumStrategy(prev, curr) {
+  return curr.close > prev.close ? 1 : 0;
+}
+
+// 2. Moving Average
+function maStrategy(data, i) {
+  if (i < 5) return 0;
+  const ma = (data[i-1].close + data[i-2].close + data[i-3].close + data[i-4].close + data[i-5].close) / 5;
+  return data[i].close > ma ? 1 : 0;
+}
+
+// 3. Volume Breakout
+function volumeStrategy(prev, curr) {
+  return curr.volume > prev.volume * 1.2 ? 1 : 0;
+}
+
+// 4. Volatility Expansion
+function volatilityStrategy(prev, curr) {
+  return (curr.high - curr.low) > (prev.high - prev.low) ? 1 : 0;
+}
+
+// ===== ENSEMBLE =====
+function ensembleStrategy(data) {
   let pnl = 0;
   let trades = [];
 
-  for (let i = 5; i < data.length; i++) {
-    const prev = data[i - 1];
+  for (let i = 6; i < data.length; i++) {
+    const prev = data[i-1];
     const curr = data[i];
 
-    // moving average trend
-    const ma = (data[i-1].close + data[i-2].close + data[i-3].close + data[i-4].close + data[i-5].close) / 5;
+    const signals = [
+      momentumStrategy(prev, curr),
+      maStrategy(data, i),
+      volumeStrategy(prev, curr),
+      volatilityStrategy(prev, curr)
+    ];
 
-    const trendUp = curr.close > ma;
-    const momentum = curr.close > prev.close;
-    const volumeSpike = curr.volume > prev.volume * 1.2;
+    const score = signals.reduce((a,b)=>a+b,0);
 
-    // refined entry condition
-    if (trendUp && momentum && volumeSpike) {
+    // require 3/4 agreement
+    if (score >= 3) {
       const entry = curr.close;
       const target = entry * 1.01;
       const stop = entry * 0.995;
 
-      let exitPrice = entry;
+      let exit = entry;
 
       for (let j = i+1; j < data.length; j++) {
-        if (data[j].high >= target) {
-          exitPrice = target;
-          break;
-        }
-        if (data[j].low <= stop) {
-          exitPrice = stop;
-          break;
-        }
+        if (data[j].high >= target) { exit = target; break; }
+        if (data[j].low <= stop) { exit = stop; break; }
       }
 
-      const tradePnl = exitPrice - entry;
+      const tradePnl = exit - entry;
       pnl += tradePnl;
 
       trades.push({
+        date: curr.date,
+        score,
         entry,
-        exit: exitPrice,
-        pnl: tradePnl,
-        date: curr.date
+        exit,
+        pnl: tradePnl
       });
     }
   }
@@ -76,7 +97,7 @@ function refinedStrategy(data) {
 let results = {};
 try {
   const data = loadCSV('./data.csv');
-  results = refinedStrategy(data);
+  results = ensembleStrategy(data);
 } catch (e) {
   console.log("Upload data.csv");
 }
@@ -86,14 +107,11 @@ function metrics(trades) {
   if (!trades || trades.length === 0) return {};
 
   const wins = trades.filter(t => t.pnl > 0).length;
-  const losses = trades.length - wins;
 
   return {
     totalTrades: trades.length,
     winRate: wins / trades.length,
-    avgPnL: trades.reduce((a,b)=>a+b.pnl,0)/trades.length,
-    wins,
-    losses
+    avgPnL: trades.reduce((a,b)=>a+b.pnl,0)/trades.length
   };
 }
 
@@ -109,4 +127,4 @@ app.get('/trades', (req, res) => {
   res.json(results.trades || []);
 });
 
-app.listen(PORT, () => console.log("Strategy Refinement Running"));
+app.listen(PORT, () => console.log("Ensemble Engine Running"));
