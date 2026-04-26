@@ -11,10 +11,11 @@ let accessToken = process.env.ACCESS_TOKEN || null;
 
 if (accessToken) kite.setAccessToken(accessToken);
 
-// STATE
 let capital = 0;
 let scanOutput = [];
 let priceHistory = {};
+
+const symbols = ["NSE:RELIANCE","NSE:TCS","NSE:INFY"];
 
 // LOGIN
 app.get('/login', (req, res) => res.redirect(kite.getLoginURL()));
@@ -33,27 +34,29 @@ async function updateCapital() {
   capital = m?.equity?.available?.cash || m?.equity?.net || capital;
 }
 
-// REAL ALPHA LOGIC
-function computeMomentum(hist) {
+// REGIME DETECTION
+function detectRegime(hist) {
+  if (hist.length < 10) return { type: "NORMAL", strength: 0.5 };
+
+  const max = Math.max(...hist);
+  const min = Math.min(...hist);
+  const avg = hist.reduce((a,b)=>a+b,0)/hist.length;
+
+  const rangePct = (max - min) / avg;
+
+  if (rangePct < 0.002) return { type: "SIDEWAYS", strength: 0.2 };
+  if (rangePct > 0.01) return { type: "VOLATILE", strength: 0.9 };
+
+  return { type: "TRENDING", strength: 0.7 };
+}
+
+// MOMENTUM
+function momentum(hist) {
   let up = 0;
   for (let i=1;i<hist.length;i++){
     if (hist[i] > hist[i-1]) up++;
   }
   return hist.length ? up / hist.length : 0.5;
-}
-
-function computeVolatility(hist) {
-  let changes = [];
-  for (let i=1;i<hist.length;i++){
-    changes.push(Math.abs(hist[i]-hist[i-1]));
-  }
-  return changes.length ? changes.reduce((a,b)=>a+b,0)/changes.length : 0;
-}
-
-function alphaSignal({momentum, breakout, volatility}) {
-  if (momentum > 0.6 && breakout > 1.5 && volatility > 0) return "BUY";
-  if (momentum < 0.4 && breakout > 1.5 && volatility > 0) return "SELL";
-  return null;
 }
 
 // LOOP
@@ -62,9 +65,7 @@ setInterval(async () => {
 
   await updateCapital();
 
-  const symbols = ["NSE:RELIANCE","NSE:TCS","NSE:INFY"];
   const quotes = await kite.getQuote(symbols);
-
   scanOutput = [];
 
   for (const sym of symbols) {
@@ -72,8 +73,6 @@ setInterval(async () => {
     if (!q) continue;
 
     const price = q.last_price;
-    const volume = q.volume || 0;
-    const avgVol = q.average_volume || 1;
 
     if (!priceHistory[sym]) priceHistory[sym] = [];
     priceHistory[sym].push(price);
@@ -81,18 +80,20 @@ setInterval(async () => {
 
     const hist = priceHistory[sym];
 
-    const momentum = computeMomentum(hist);
-    const volatility = computeVolatility(hist);
-    const breakout = volume / avgVol;
+    const m = momentum(hist);
+    const regime = detectRegime(hist);
 
-    const signal = alphaSignal({momentum, breakout, volatility});
+    let signal = null;
+
+    if (regime.type === "TRENDING" && m > 0.6) signal = "BUY";
+    if (regime.type === "TRENDING" && m < 0.4) signal = "SELL";
 
     scanOutput.push({
       symbol: sym,
       price,
-      momentum,
-      volatility,
-      breakout,
+      momentum: m,
+      regime: regime.type,
+      regimeStrength: regime.strength,
       signal
     });
   }
@@ -107,4 +108,4 @@ app.get('/', (req, res) => {
   });
 });
 
-app.listen(PORT, () => console.log("Real Alpha Engine Running"));
+app.listen(PORT, () => console.log("Regime Engine Running"));
