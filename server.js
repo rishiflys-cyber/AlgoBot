@@ -17,10 +17,14 @@ let accessToken=null;
 let state={
  capital:0,
  pnl:0,
+ strategies:{
+  momentum:{weight:0.33,pnl:0},
+  breakout:{weight:0.33,pnl:0},
+  meanReversion:{weight:0.33,pnl:0}
+ },
  rankedSignals:[],
  activeTrades:[],
  closedTrades:[],
- serverIP:null,
  mode:LIVE?"LIVE":"PAPER"
 };
 
@@ -46,41 +50,55 @@ app.get('/redirect',async(req,res)=>{
   fs.writeFileSync(TOKEN_FILE,JSON.stringify({token:accessToken}));
 
   const ip=await axios.get("https://api.ipify.org?format=json");
-  state.serverIP=ip.data.ip;
-
-  await updateCapital();
-
-  res.send("Login success | IP: "+state.serverIP+" | Capital: "+state.capital);
- }catch(e){
+  res.send("Login success | IP: "+ip.data.ip);
+ }catch{
   res.send("Login failed");
  }
 });
 
-// CAPITAL FIX (CRITICAL)
+// CAPITAL
 async function updateCapital(){
  try{
   const m=await kite.getMargins();
   state.capital =
     m?.equity?.available?.cash ||
     m?.equity?.net ||
-    m?.commodity?.available?.cash ||
     state.capital;
- }catch(e){
-  console.log("CAPITAL ERROR",e.message);
- }
+ }catch{}
 }
 
-// SCORE ENGINE
-function scoreStock(q,prev){
- if(!prev||!q.ohlc) return 0;
- let score=0;
+// STRATEGY DETECTION
+function detectStrategy(q,prev){
+ if(!prev||!q.ohlc) return null;
 
- if(q.last_price>prev) score+=1;
- if(q.last_price>q.ohlc.open) score+=1;
- if(q.last_price>q.ohlc.high*0.995) score+=2;
- if((q.ohlc.high-q.ohlc.low)/q.last_price>0.01) score+=1;
+ if(q.last_price>prev) return "momentum";
+ if(q.last_price>q.ohlc.high*0.995) return "breakout";
+ if(q.last_price<q.ohlc.low*1.005) return "meanReversion";
 
- return score;
+ return null;
+}
+
+// SELF LEARNING ENGINE
+function updateWeights(){
+ let totalPnl = Object.values(state.strategies)
+   .reduce((sum,s)=>sum+s.pnl,0);
+
+ if(totalPnl===0) return;
+
+ for(const key in state.strategies){
+  let s=state.strategies[key];
+  let performance = s.pnl / totalPnl;
+
+  s.weight = Math.max(0.1, Math.min(0.7, performance));
+ }
+
+ // normalize
+ let sum = Object.values(state.strategies)
+   .reduce((a,b)=>a+b.weight,0);
+
+ for(const key in state.strategies){
+  state.strategies[key].weight /= sum;
+ }
 }
 
 // MAIN LOOP
@@ -92,7 +110,7 @@ setInterval(async()=>{
 
   const stocks=[
    "NSE:RELIANCE","NSE:TCS","NSE:INFY","NSE:HDFCBANK","NSE:ICICIBANK",
-   "NSE:LT","NSE:SBIN","NSE:AXISBANK","NSE:KOTAKBANK","NSE:ITC"
+   "NSE:SBIN","NSE:AXISBANK","NSE:KOTAKBANK","NSE:ITC","NSE:LT"
   ];
 
   const quotes=await kite.getQuote(stocks);
@@ -103,11 +121,18 @@ setInterval(async()=>{
    const q=quotes[sym];
    if(!q||!q.last_price) continue;
 
-   const score=scoreStock(q,lastPrice[sym]);
+   const strategy=detectStrategy(q,lastPrice[sym]);
    lastPrice[sym]=q.last_price;
 
-   if(score>0){
-    signals.push({symbol:sym,score,price:q.last_price});
+   if(strategy){
+    const weight=state.strategies[strategy].weight;
+
+    signals.push({
+     symbol:sym,
+     strategy,
+     score:weight,
+     price:q.last_price
+    });
    }
   }
 
@@ -118,10 +143,10 @@ setInterval(async()=>{
 
   for(const s of top){
    if(state.activeTrades.length>=5) break;
-
    if(state.capital<=0) continue;
 
-   const qty=Math.max(1,Math.floor((state.capital*0.02)/s.price));
+   const alloc = state.capital * state.strategies[s.strategy].weight;
+   const qty=Math.max(1,Math.floor((alloc*0.02)/s.price));
 
    if(LIVE){
     const [exchange,tradingsymbol]=s.symbol.split(":");
@@ -138,13 +163,44 @@ setInterval(async()=>{
 
    state.activeTrades.push({
     symbol:s.symbol,
+    strategy:s.strategy,
     entry:s.price,
     qty,
     sl:s.price*0.995,
-    target:s.price*1.02,
-    score:s.score
+    target:s.price*1.02
    });
   }
+
+  // EXIT + LEARNING
+  state.activeTrades=state.activeTrades.filter(tr=>{
+   const cp=lastPrice[tr.symbol];
+   if(!cp) return true;
+
+   if(cp>=tr.target||cp<=tr.sl){
+    const pnl=(cp-tr.entry)*tr.qty;
+    state.pnl+=pnl;
+    state.strategies[tr.strategy].pnl+=pnl;
+
+    updateWeights(); // 🔥 learning happens here
+
+    if(LIVE){
+     const [exchange,tradingsymbol]=tr.symbol.split(":");
+     kite.placeOrder("regular",{
+      exchange,
+      tradingsymbol,
+      transaction_type:"SELL",
+      quantity:tr.qty,
+      product:"MIS",
+      order_type:"MARKET",
+      market_protection:2
+     });
+    }
+
+    state.closedTrades.push({...tr,exit:cp,pnl});
+    return false;
+   }
+   return true;
+  });
 
  }catch(e){
   console.log("ERROR",e.message);
@@ -155,4 +211,4 @@ setInterval(async()=>{
 app.get('/',(req,res)=>res.json(state));
 app.get('/performance',(req,res)=>res.json(state));
 
-app.listen(PORT,()=>console.log("V23 FIXED RUNNING"));
+app.listen(PORT,()=>console.log("V24 SELF LEARNING RUNNING"));
