@@ -6,93 +6,89 @@ const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const JOURNAL_FILE = "./journal.json";
+const RESULTS_FILE = "./research_results.json";
 
-// ===== LOAD JOURNAL =====
-function loadJournal() {
+// ===== LOAD/SAVE =====
+function loadResults() {
   try {
-    return JSON.parse(fs.readFileSync(JOURNAL_FILE));
+    return JSON.parse(fs.readFileSync(RESULTS_FILE));
   } catch {
     return [];
   }
 }
 
-function saveJournal(data) {
-  fs.writeFileSync(JOURNAL_FILE, JSON.stringify(data, null, 2));
+function saveResults(data) {
+  fs.writeFileSync(RESULTS_FILE, JSON.stringify(data, null, 2));
 }
 
-let journal = loadJournal();
+let results = loadResults();
 
-// ===== BACKTEST ENGINE (simple deterministic) =====
-function backtest(prices) {
-  let trades = [];
+// ===== STRATEGY VARIATIONS =====
+function generateStrategyVariant() {
+  return {
+    id: Date.now(),
+    momentumThreshold: 0.5 + Math.random() * 0.3,
+    breakoutThreshold: 1 + Math.random()
+  };
+}
+
+// ===== BACKTEST =====
+function runBacktest(strategy) {
   let pnl = 0;
+  let wins = 0;
 
-  for (let i = 1; i < prices.length; i++) {
-    const change = prices[i] - prices[i - 1];
+  let price = 1000;
 
-    // simple momentum logic
-    if (change > 0) {
+  for (let i = 0; i < 100; i++) {
+    const change = (Math.random() - 0.5) * 20;
+    price += change;
+
+    const momentum = Math.random();
+    const breakout = 1 + Math.random();
+
+    if (momentum > strategy.momentumThreshold && breakout > strategy.breakoutThreshold) {
       pnl += change;
-      trades.push({ result: change });
-    } else {
-      pnl += change;
-      trades.push({ result: change });
+      if (change > 0) wins++;
     }
   }
 
-  return { pnl, trades };
+  return {
+    pnl,
+    winRate: wins / 100
+  };
 }
 
-// ===== REFINEMENT LOGIC =====
-function analyzeJournal() {
-  if (journal.length === 0) return { winRate: 0, avgPnL: 0 };
-
-  const wins = journal.filter(t => t.pnl > 0).length;
-  const winRate = wins / journal.length;
-
-  const avgPnL = journal.reduce((a,b)=>a+b.pnl,0)/journal.length;
-
-  return { winRate, avgPnL };
-}
-
-// ===== SIMULATION LOOP =====
+// ===== MAIN LOOP =====
 setInterval(() => {
-  // simulate price data
-  let prices = [];
-  let p = 1000;
 
-  for (let i = 0; i < 50; i++) {
-    p += (Math.random() - 0.5) * 10;
-    prices.push(p);
-  }
+  const strat = generateStrategyVariant();
+  const result = runBacktest(strat);
 
-  const result = backtest(prices);
-
-  // log trades
-  result.trades.forEach(t => {
-    journal.push({ pnl: t.result, time: new Date().toISOString() });
+  results.push({
+    ...strat,
+    ...result,
+    timestamp: new Date().toISOString()
   });
 
-  // keep last 500
-  journal = journal.slice(-500);
+  // keep top 50 by pnl
+  results = results.sort((a,b)=>b.pnl-a.pnl).slice(0,50);
 
-  saveJournal(journal);
+  saveResults(results);
 
 }, 3000);
 
 // ===== ROUTES =====
 app.get('/', (req, res) => {
-  const analysis = analyzeJournal();
-
   res.json({
-    tradesLogged: journal.length,
-    ...analysis
+    topStrategies: results.slice(0,10)
   });
 });
 
-app.get('/journal', (req, res) => {
-  res.json(journal);
+app.get('/report', (req, res) => {
+  res.json({
+    totalTested: results.length,
+    best: results[0] || null
+  });
 });
 
-app.listen(PORT, () => console.log("Edge Refinement Engine Running"));
+app.listen(PORT, () => console.log("Research Workflow Running"));

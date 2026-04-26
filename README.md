@@ -1,7 +1,7 @@
 
-Edge Refinement System
+Institutional Research Workflow
 
-- Backtesting engine
-- Trade journaling (persistent)
-- Performance analysis (win rate, avg pnl)
-- Continuous refinement loop
+- Strategy variation testing
+- Backtest comparison
+- Ranking & selection
+- Persistent research results
