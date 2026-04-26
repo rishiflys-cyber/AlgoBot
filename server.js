@@ -14,9 +14,13 @@ const TOKEN_FILE="access_token.json";
 let kite=new KiteConnect({api_key:process.env.KITE_API_KEY});
 let accessToken=null;
 
+// ===== STATE =====
 let state={
  capital:0,
  pnl:0,
+ peakEquity:0,
+ drawdown:0,
+ killSwitch:false,
  regime:"UNKNOWN",
  strategies:{
   momentum:{weight:0.33,pnl:0},
@@ -62,6 +66,24 @@ async function updateCapital(){
  try{
   const m=await kite.getMargins();
   state.capital = m?.equity?.available?.cash || m?.equity?.net || state.capital;
+
+  // EQUITY CURVE UPDATE
+  const equity = state.capital + state.pnl;
+
+  if(equity > state.peakEquity){
+    state.peakEquity = equity;
+  }
+
+  if(state.peakEquity > 0){
+    state.drawdown = (state.peakEquity - equity) / state.peakEquity;
+  }
+
+  // KILL SWITCH (10% DD)
+  if(state.drawdown > 0.10){
+    state.killSwitch = true;
+    console.log("🚨 KILL SWITCH ACTIVATED");
+  }
+
  }catch{}
 }
 
@@ -79,20 +101,6 @@ function detectRegime(price){
   return "TREND";
  } else {
   return "SIDEWAYS";
- }
-}
-
-// ADAPT STRATEGY WEIGHTS BASED ON REGIME
-function applyRegimeWeights(regime){
- if(regime==="TREND"){
-  state.strategies.momentum.weight=0.6;
-  state.strategies.breakout.weight=0.3;
-  state.strategies.meanReversion.weight=0.1;
- }
- else if(regime==="SIDEWAYS"){
-  state.strategies.momentum.weight=0.2;
-  state.strategies.breakout.weight=0.2;
-  state.strategies.meanReversion.weight=0.6;
  }
 }
 
@@ -114,13 +122,18 @@ setInterval(async()=>{
 
   await updateCapital();
 
-  const stocks=["NSE:NIFTY 50"]; // using index for regime
+  // STOP TRADING IF KILL SWITCH
+  if(state.killSwitch){
+    console.log("Trading stopped due to drawdown");
+    return;
+  }
+
+  const stocks=["NSE:NIFTY 50"];
   const q=await kite.getQuote(stocks);
   const price=q["NSE:NIFTY 50"]?.last_price;
 
   if(price){
    state.regime = detectRegime(price);
-   applyRegimeWeights(state.regime);
   }
 
   const universe=[
@@ -139,21 +152,17 @@ setInterval(async()=>{
    const strategy=detectStrategy(q,lastPrices[lastPrices.length-2]);
 
    if(strategy){
-    const weight=state.strategies[strategy].weight;
-
     signals.push({
      symbol:sym,
      strategy,
-     score:weight,
+     score:1,
      price:q.last_price
     });
    }
   }
 
   signals.sort((a,b)=>b.score-a.score);
-  const top=signals.slice(0,5);
-
-  state.rankedSignals=top;
+  state.rankedSignals = signals.slice(0,5);
 
  }catch(e){
   console.log("ERROR",e.message);
@@ -164,4 +173,4 @@ setInterval(async()=>{
 app.get('/',(req,res)=>res.json(state));
 app.get('/performance',(req,res)=>res.json(state));
 
-app.listen(PORT,()=>console.log("V25 REGIME SYSTEM RUNNING"));
+app.listen(PORT,()=>console.log("V26 RISK SYSTEM RUNNING"));
