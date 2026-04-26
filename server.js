@@ -1,4 +1,4 @@
-// STEP 6: TRADE COOLDOWN SYSTEM (NO DOWNGRADE)
+// STEP 7: PERFORMANCE ENGINE (NO DOWNGRADE)
 
 require("dotenv").config();
 const express = require("express");
@@ -14,7 +14,37 @@ let capital=0, pnl=0;
 let activeTrades=[], closedTrades=[];
 let history={}, volumeHistory={}, scanOutput=[];
 let indexHistory=[];
-let lossTracker={}; // 🔥 NEW
+let lossTracker={};
+
+// 🔥 PERFORMANCE ENGINE
+let perfStats = {
+ totalTrades:0,
+ wins:0,
+ losses:0,
+ totalWin:0,
+ totalLoss:0
+};
+
+function updatePerformance(pnlTrade){
+ perfStats.totalTrades++;
+ if(pnlTrade > 0){
+   perfStats.wins++;
+   perfStats.totalWin += pnlTrade;
+ } else {
+   perfStats.losses++;
+   perfStats.totalLoss += pnlTrade;
+ }
+}
+
+function getMetrics(){
+ let winRate = perfStats.totalTrades ? (perfStats.wins / perfStats.totalTrades) : 0;
+ let avgWin = perfStats.wins ? (perfStats.totalWin / perfStats.wins) : 0;
+ let avgLoss = perfStats.losses ? Math.abs(perfStats.totalLoss / perfStats.losses) : 0;
+
+ let expectancy = (winRate * avgWin) - ((1 - winRate) * avgLoss);
+
+ return { winRate, avgWin, avgLoss, expectancy };
+}
 
 // LOGIN
 app.get("/login",(req,res)=> res.redirect(kite.getLoginURL()));
@@ -63,7 +93,6 @@ function detectRegime(prices){
  return "NORMAL";
 }
 
-// EXISTING
 function riskGate(price, qty){
  let exposure = activeTrades.reduce((a,t)=>a+(t.entry*t.qty),0);
  return (exposure + price*qty) <= capital*0.6;
@@ -105,15 +134,12 @@ function getSLTP(entry, prices){
  return { sl, tp };
 }
 
-// 🔥 STEP 6 ADDITION — COOLDOWN SYSTEM
 function checkCooldown(symbol){
  let data = lossTracker[symbol];
  if(!data) return false;
-
  if(data.lossCount < 2) return false;
-
  let minutesPassed = (Date.now() - data.lastLossTime) / 60000;
- return minutesPassed < 10; // 10 min cooldown
+ return minutesPassed < 10;
 }
 
 function updateLoss(symbol, profit){
@@ -151,7 +177,6 @@ setInterval(async()=>{
 
   for(let s of STOCKS){
 
-    // 🔥 COOLDOWN CHECK
     if(checkCooldown(s)) continue;
 
     let d=quotes["NSE:"+s];
@@ -186,16 +211,7 @@ setInterval(async()=>{
       signal="BUY";
     }
 
-    scanOutput.push({
-      symbol:s,
-      price,
-      probability:pr,
-      regime,
-      agreement,
-      quality,
-      signal,
-      cooldown: checkCooldown(s)
-    });
+    scanOutput.push({symbol:s,price,probability:pr,regime,quality,signal});
 
     if(signal && !activeTrades.find(t=>t.symbol===s)){
 
@@ -216,17 +232,10 @@ setInterval(async()=>{
         order_type:"MARKET"
       });
 
-      activeTrades.push({
-        symbol:s,
-        entry:price,
-        qty,
-        sl,
-        tp
-      });
+      activeTrades.push({symbol:s,entry:price,qty,sl,tp});
     }
   }
 
-  // EXIT + LOSS TRACK
   let remaining=[];
   for(let t of activeTrades){
     let cp = quotes["NSE:"+t.symbol]?.last_price;
@@ -248,6 +257,7 @@ setInterval(async()=>{
       closedTrades.push(pnlTrade);
 
       updateLoss(t.symbol, pnlTrade);
+      updatePerformance(pnlTrade); // 🔥 NEW
 
     } else {
       remaining.push(t);
@@ -255,16 +265,21 @@ setInterval(async()=>{
   }
 
   activeTrades = remaining;
-
-  let realized = closedTrades.reduce((a,b)=>a+b,0);
-  pnl = realized;
+  pnl = closedTrades.reduce((a,b)=>a+b,0);
 
  }catch(e){}
 },3000);
 
 // DASHBOARD
 app.get("/performance",(req,res)=>{
- res.json({capital,pnl,activeTrades,closedTrades,scan:scanOutput});
+ res.json({
+  capital,
+  pnl,
+  activeTrades,
+  closedTrades,
+  scan:scanOutput,
+  performance:getMetrics() // 🔥 NEW
+ });
 });
 
 app.listen(process.env.PORT||3000);
