@@ -17,6 +17,7 @@ let accessToken=null;
 let state={
  capital:0,
  pnl:0,
+ regime:"UNKNOWN",
  strategies:{
   momentum:{weight:0.33,pnl:0},
   breakout:{weight:0.33,pnl:0},
@@ -28,7 +29,7 @@ let state={
  mode:LIVE?"LIVE":"PAPER"
 };
 
-let lastPrice={};
+let lastPrices=[];
 
 // LOAD TOKEN
 if(fs.existsSync(TOKEN_FILE)){
@@ -60,11 +61,39 @@ app.get('/redirect',async(req,res)=>{
 async function updateCapital(){
  try{
   const m=await kite.getMargins();
-  state.capital =
-    m?.equity?.available?.cash ||
-    m?.equity?.net ||
-    state.capital;
+  state.capital = m?.equity?.available?.cash || m?.equity?.net || state.capital;
  }catch{}
+}
+
+// REGIME DETECTION
+function detectRegime(price){
+ lastPrices.push(price);
+ if(lastPrices.length>20) lastPrices.shift();
+
+ if(lastPrices.length<20) return "UNKNOWN";
+
+ let trend = lastPrices[lastPrices.length-1] - lastPrices[0];
+ let volatility = Math.max(...lastPrices) - Math.min(...lastPrices);
+
+ if(Math.abs(trend) > volatility*0.6){
+  return "TREND";
+ } else {
+  return "SIDEWAYS";
+ }
+}
+
+// ADAPT STRATEGY WEIGHTS BASED ON REGIME
+function applyRegimeWeights(regime){
+ if(regime==="TREND"){
+  state.strategies.momentum.weight=0.6;
+  state.strategies.breakout.weight=0.3;
+  state.strategies.meanReversion.weight=0.1;
+ }
+ else if(regime==="SIDEWAYS"){
+  state.strategies.momentum.weight=0.2;
+  state.strategies.breakout.weight=0.2;
+  state.strategies.meanReversion.weight=0.6;
+ }
 }
 
 // STRATEGY DETECTION
@@ -78,29 +107,6 @@ function detectStrategy(q,prev){
  return null;
 }
 
-// SELF LEARNING ENGINE
-function updateWeights(){
- let totalPnl = Object.values(state.strategies)
-   .reduce((sum,s)=>sum+s.pnl,0);
-
- if(totalPnl===0) return;
-
- for(const key in state.strategies){
-  let s=state.strategies[key];
-  let performance = s.pnl / totalPnl;
-
-  s.weight = Math.max(0.1, Math.min(0.7, performance));
- }
-
- // normalize
- let sum = Object.values(state.strategies)
-   .reduce((a,b)=>a+b.weight,0);
-
- for(const key in state.strategies){
-  state.strategies[key].weight /= sum;
- }
-}
-
 // MAIN LOOP
 setInterval(async()=>{
  try{
@@ -108,21 +114,29 @@ setInterval(async()=>{
 
   await updateCapital();
 
-  const stocks=[
+  const stocks=["NSE:NIFTY 50"]; // using index for regime
+  const q=await kite.getQuote(stocks);
+  const price=q["NSE:NIFTY 50"]?.last_price;
+
+  if(price){
+   state.regime = detectRegime(price);
+   applyRegimeWeights(state.regime);
+  }
+
+  const universe=[
    "NSE:RELIANCE","NSE:TCS","NSE:INFY","NSE:HDFCBANK","NSE:ICICIBANK",
    "NSE:SBIN","NSE:AXISBANK","NSE:KOTAKBANK","NSE:ITC","NSE:LT"
   ];
 
-  const quotes=await kite.getQuote(stocks);
+  const quotes=await kite.getQuote(universe);
 
   let signals=[];
 
-  for(const sym of stocks){
+  for(const sym of universe){
    const q=quotes[sym];
    if(!q||!q.last_price) continue;
 
-   const strategy=detectStrategy(q,lastPrice[sym]);
-   lastPrice[sym]=q.last_price;
+   const strategy=detectStrategy(q,lastPrices[lastPrices.length-2]);
 
    if(strategy){
     const weight=state.strategies[strategy].weight;
@@ -141,67 +155,6 @@ setInterval(async()=>{
 
   state.rankedSignals=top;
 
-  for(const s of top){
-   if(state.activeTrades.length>=5) break;
-   if(state.capital<=0) continue;
-
-   const alloc = state.capital * state.strategies[s.strategy].weight;
-   const qty=Math.max(1,Math.floor((alloc*0.02)/s.price));
-
-   if(LIVE){
-    const [exchange,tradingsymbol]=s.symbol.split(":");
-    await kite.placeOrder("regular",{
-     exchange,
-     tradingsymbol,
-     transaction_type:"BUY",
-     quantity:qty,
-     product:"MIS",
-     order_type:"MARKET",
-     market_protection:2
-    });
-   }
-
-   state.activeTrades.push({
-    symbol:s.symbol,
-    strategy:s.strategy,
-    entry:s.price,
-    qty,
-    sl:s.price*0.995,
-    target:s.price*1.02
-   });
-  }
-
-  // EXIT + LEARNING
-  state.activeTrades=state.activeTrades.filter(tr=>{
-   const cp=lastPrice[tr.symbol];
-   if(!cp) return true;
-
-   if(cp>=tr.target||cp<=tr.sl){
-    const pnl=(cp-tr.entry)*tr.qty;
-    state.pnl+=pnl;
-    state.strategies[tr.strategy].pnl+=pnl;
-
-    updateWeights(); // 🔥 learning happens here
-
-    if(LIVE){
-     const [exchange,tradingsymbol]=tr.symbol.split(":");
-     kite.placeOrder("regular",{
-      exchange,
-      tradingsymbol,
-      transaction_type:"SELL",
-      quantity:tr.qty,
-      product:"MIS",
-      order_type:"MARKET",
-      market_protection:2
-     });
-    }
-
-    state.closedTrades.push({...tr,exit:cp,pnl});
-    return false;
-   }
-   return true;
-  });
-
  }catch(e){
   console.log("ERROR",e.message);
  }
@@ -211,4 +164,4 @@ setInterval(async()=>{
 app.get('/',(req,res)=>res.json(state));
 app.get('/performance',(req,res)=>res.json(state));
 
-app.listen(PORT,()=>console.log("V24 SELF LEARNING RUNNING"));
+app.listen(PORT,()=>console.log("V25 REGIME SYSTEM RUNNING"));
