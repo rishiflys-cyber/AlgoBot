@@ -1,9 +1,7 @@
 
-Step 120/100
-Institutional Rating: 10/10+
+ALPHA RESEARCH LAB
 
-Elite Quant Mode:
-- Sharpe ratio tracking
-- Performance analytics
-- Signal strength modeling
-- Advanced metrics layer
+- Auto strategy generation
+- Backtesting engine
+- Top strategy selection
+- Continuous improvement loop
