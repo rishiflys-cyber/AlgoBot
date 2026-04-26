@@ -1,75 +1,49 @@
 require('dotenv').config();
 const express = require('express');
-const axios = require('axios');
-const app = express();
+const KiteConnect = require("kiteconnect").KiteConnect;
 
+const app = express();
 const PORT = process.env.PORT || 3000;
 
-let botActive = true;
-let capital = 0;
-let pnl = 0;
-let activeTrades = [];
-let closedTrades = [];
-let scanOutput = [];
-
+let kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
 let accessToken = null;
 
-// ===== LOGIN ROUTE =====
+let capital = 0;
+
+// LOGIN
 app.get('/login', (req, res) => {
-  const url = `https://kite.zerodha.com/connect/login?api_key=${process.env.KITE_API_KEY}`;
+  const url = kite.getLoginURL();
   res.redirect(url);
 });
 
-// ===== REDIRECT =====
+// REDIRECT
 app.get('/redirect', async (req, res) => {
   const requestToken = req.query.request_token;
 
-  // NOTE: token exchange placeholder (needs kite SDK normally)
-  accessToken = requestToken;
+  try {
+    const response = await kite.generateSession(requestToken, process.env.KITE_API_SECRET);
+    accessToken = response.access_token;
+    kite.setAccessToken(accessToken);
 
-  res.send("Login success. Token stored.");
+    res.send("Login success");
+  } catch (err) {
+    res.send("Error in login");
+  }
 });
 
-// ===== DASHBOARD =====
-app.get('/', (req, res) => {
+// DASHBOARD
+app.get('/', async (req, res) => {
+  if (accessToken) {
+    try {
+      const margins = await kite.getMargins();
+      capital = margins.equity.available.cash;
+    } catch (e) {}
+  }
+
   res.json({
-    botActive,
     capital,
-    pnl,
-    activeTrades,
-    closedTrades,
-    scanOutput,
-    serverIP: "AUTO"
+    accessToken: accessToken ? "ACTIVE" : "NOT_LOGGED_IN"
   });
 });
 
-// ===== MOCK LOOP =====
-setInterval(() => {
-  scanOutput = [];
-
-  const symbols = ["RELIANCE", "TCS", "INFY"];
-
-  symbols.forEach(symbol => {
-    const price = Math.random() * 1000;
-    const probability = Math.random();
-    const volumeBreakout = Math.random() * 2;
-    const agreementScore = Math.floor(Math.random() * 3);
-
-    const signal = (probability > 0.6 && agreementScore >= 2) ? "BUY" : null;
-
-    scanOutput.push({
-      symbol,
-      price,
-      probability,
-      volume: Math.floor(Math.random()*100000),
-      volumeBreakout,
-      indexTrend: "UP",
-      agreementScore,
-      signal,
-      reason: "Base logic"
-    });
-  });
-
-}, 3000);
-
-app.listen(PORT, () => console.log("Server running on port " + PORT));
+app.listen(PORT, () => console.log("Server running on " + PORT));

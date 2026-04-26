@@ -1,15 +1,11 @@
-# AlgoBot Kite Login Upgrade
-
-## New Features
-- /login route
-- /redirect route
-- token capture (basic)
-
-## Setup
-npm install
-npm start
+# AlgoBot Kite Full Integration
 
 ## Flow
-1. Open /login
-2. Login Zerodha
-3. Redirect to /redirect
+1. /login
+2. login zerodha
+3. redirect handled
+4. capital fetched live
+
+## Run
+npm install
+npm start
