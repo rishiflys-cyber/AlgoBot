@@ -15,14 +15,17 @@ let kite=new KiteConnect({api_key:process.env.KITE_API_KEY});
 let accessToken=null;
 
 if(fs.existsSync(TOKEN_FILE)){
- const saved=JSON.parse(fs.readFileSync(TOKEN_FILE));
- accessToken=saved.token;
- kite.setAccessToken(accessToken);
+ try{
+  const saved=JSON.parse(fs.readFileSync(TOKEN_FILE));
+  accessToken=saved.token;
+  kite.setAccessToken(accessToken);
+ }catch(e){ console.log("TOKEN LOAD ERROR"); }
 }
 
 let state={
  capital:0,
  pnl:0,
+ regime:"UNKNOWN",
  activeTrades:[],
  closedTrades:[],
  winRate:0,
@@ -36,7 +39,7 @@ let tradeHistory=[];
 let lastPrice={};
 let dynamicThreshold=3;
 
-// login
+// LOGIN
 app.get('/login',(req,res)=>res.redirect(kite.getLoginURL()));
 
 app.get('/redirect',async(req,res)=>{
@@ -51,30 +54,43 @@ app.get('/redirect',async(req,res)=>{
 
   res.send("Login success | IP: "+state.serverIP);
  }catch(e){
+  console.log("LOGIN ERROR:",e.message);
   res.send("Login failed");
  }
 });
 
-// capital
+// CAPITAL SAFE
 async function updateCapital(){
  try{
   const m=await kite.getMargins();
-  state.capital=m?.equity?.available?.cash||state.capital;
- }catch{}
+  state.capital=m?.equity?.available?.cash || m?.equity?.net || state.capital;
+ }catch(e){
+  console.log("MARGIN ERROR:",e.message);
+ }
 }
 
-// alpha
+// REGIME SAFE
+function detectRegime(q){
+ try{
+  const range=(q.ohlc.high - q.ohlc.low)/q.last_price;
+  if(range>0.015) return "TRENDING";
+  if(range<0.007) return "SIDEWAYS";
+  return "NORMAL";
+ }catch{ return "NORMAL"; }
+}
+
+// SCORE SAFE
 function getScore(q,prev){
  if(!prev) return 0;
  let s=0;
  if(q.last_price>prev) s++;
- if(q.last_price>q.ohlc.open) s++;
- if(q.last_price>q.ohlc.high*0.995) s++;
- if((q.ohlc.high-q.ohlc.low)/q.last_price>0.01) s++;
+ if(q.ohlc && q.last_price>q.ohlc.open) s++;
+ if(q.ohlc && q.last_price>q.ohlc.high*0.995) s++;
+ if(q.ohlc && (q.ohlc.high-q.ohlc.low)/q.last_price>0.01) s++;
  return s;
 }
 
-// adaptive logic
+// ADAPTIVE SAFE
 function adapt(){
  if(tradeHistory.length<10) return;
 
@@ -85,89 +101,97 @@ function adapt(){
  state.avgWin=wins.length?wins.reduce((a,b)=>a+b.pnl,0)/wins.length:0;
  state.avgLoss=losses.length?losses.reduce((a,b)=>a+b.pnl,0)/losses.length:0;
 
- // adapt threshold
- if(state.winRate<0.4){
-  dynamicThreshold=4; // stricter
- }
- else if(state.winRate>0.6){
-  dynamicThreshold=2; // more aggressive
- }
- else{
-  dynamicThreshold=3;
- }
+ if(state.winRate<0.4) dynamicThreshold=4;
+ else if(state.winRate>0.6) dynamicThreshold=2;
+ else dynamicThreshold=3;
 }
 
-// execute
+// EXECUTION SAFE
 async function executeOrder(sym,qty,side){
- if(!LIVE) return;
- const [exchange,tradingsymbol]=sym.split(":");
- await kite.placeOrder("regular",{
-  exchange,
-  tradingsymbol,
-  transaction_type:side,
-  quantity:qty,
-  product:"MIS",
-  order_type:"MARKET",
-  market_protection:2
- });
+ try{
+  if(!LIVE) return;
+  const [exchange,tradingsymbol]=sym.split(":");
+  await kite.placeOrder("regular",{
+   exchange,
+   tradingsymbol,
+   transaction_type:side,
+   quantity:qty,
+   product:"MIS",
+   order_type:"MARKET",
+   market_protection:2
+  });
+ }catch(e){
+  console.log("ORDER ERROR:",e.message);
+ }
 }
 
-// loop
+// MAIN LOOP SAFE
 setInterval(async()=>{
- if(!accessToken) return;
+ try{
+  if(!accessToken) return;
 
- await updateCapital();
+  await updateCapital();
 
- const stocks=["NSE:RELIANCE","NSE:TCS","NSE:INFY","NSE:HDFCBANK"];
- const quotes=await kite.getQuote(stocks);
+  const stocks=["NSE:RELIANCE","NSE:TCS","NSE:INFY","NSE:HDFCBANK"];
+  const quotes=await kite.getQuote(stocks);
 
- for(const sym of stocks){
-  const q=quotes[sym];
-  if(!q) continue;
+  for(const sym of stocks){
+   const q=quotes[sym];
+   if(!q || !q.last_price) continue;
 
-  const score=getScore(q,lastPrice[sym]);
-  lastPrice[sym]=q.last_price;
+   state.regime=detectRegime(q);
 
-  if(score<dynamicThreshold) continue;
+   const score=getScore(q,lastPrice[sym]);
+   lastPrice[sym]=q.last_price;
 
-  if(state.activeTrades.length>=2) break;
+   if(state.regime==="SIDEWAYS" && score<4) continue;
+   if(state.regime==="TRENDING" && score<2) continue;
+   if(state.regime==="NORMAL" && score<dynamicThreshold) continue;
 
-  const qty=Math.max(1,Math.floor((state.capital*0.01)/q.last_price));
+   if(state.activeTrades.length>=2) break;
 
-  await executeOrder(sym,qty,"BUY");
+   const qty=Math.max(1,Math.floor((state.capital*0.01)/q.last_price));
+   if(qty<=0) continue;
 
-  state.activeTrades.push({
-   symbol:sym,
-   entry:q.last_price,
-   qty,
-   sl:q.last_price*0.995,
-   target:q.last_price*1.02,
-   score
-  });
- }
+   await executeOrder(sym,qty,"BUY");
 
- // exits
- state.activeTrades=state.activeTrades.filter(tr=>{
-  const cp=lastPrice[tr.symbol];
-  if(cp>=tr.target||cp<=tr.sl){
-   const pnl=(cp-tr.entry)*tr.qty;
-   state.pnl+=pnl;
-
-   tradeHistory.push({pnl,score:tr.score});
-   adapt();
-
-   executeOrder(tr.symbol,tr.qty,"SELL");
-
-   state.closedTrades.push({...tr,exit:cp,pnl});
-   return false;
+   state.activeTrades.push({
+    symbol:sym,
+    entry:q.last_price,
+    qty,
+    sl:q.last_price*0.995,
+    target:q.last_price*1.02,
+    score
+   });
   }
-  return true;
- });
 
+  // EXIT SAFE
+  state.activeTrades=state.activeTrades.filter(tr=>{
+   const cp=lastPrice[tr.symbol];
+   if(!cp) return true;
+
+   if(cp>=tr.target || cp<=tr.sl){
+    const pnl=(cp-tr.entry)*tr.qty;
+    state.pnl+=pnl;
+
+    tradeHistory.push({pnl,score:tr.score});
+    adapt();
+
+    executeOrder(tr.symbol,tr.qty,"SELL");
+
+    state.closedTrades.push({...tr,exit:cp,pnl});
+    return false;
+   }
+   return true;
+  });
+
+ }catch(e){
+  console.log("LOOP ERROR:",e.message);
+ }
 },3000);
 
-// routes
+// ROUTES
 app.get('/',(req,res)=>res.json(state));
 app.get('/performance',(req,res)=>res.json(state));
 
-app.listen(PORT,()=>console.log("ADAPTIVE V16 RUNNING"));
+app.listen(PORT,()=>console.log("V17 FIXED RUNNING"));
