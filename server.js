@@ -17,6 +17,29 @@ let closedTrades=[];
 let history={}, volumeHistory={}, scanOutput=[];
 let serverIP="UNKNOWN";
 
+// ================= WEALTH LAYER (NEW) =================
+let taxConfig = {
+  taxRate: 0.30,          // intraday approx
+  withdrawPercent: 0.20   // withdraw 20% of profit
+};
+
+let wealthStats = {
+  totalProfit: 0,
+  taxReserve: 0,
+  withdrawable: 0,
+  reinvestable: 0
+};
+
+function updateWealth(pnlValue){
+  if(pnlValue <= 0) return;
+
+  wealthStats.totalProfit = pnlValue;
+
+  wealthStats.taxReserve = pnlValue * taxConfig.taxRate;
+  wealthStats.withdrawable = pnlValue * taxConfig.withdrawPercent;
+  wealthStats.reinvestable = pnlValue - wealthStats.taxReserve - wealthStats.withdrawable;
+}
+
 // ================= SAFETY =================
 process.on("uncaughtException", e=>console.error("UNCAUGHT:",e));
 process.on("unhandledRejection", e=>console.error("UNHANDLED:",e));
@@ -62,19 +85,16 @@ function volumeBreakout(symbol, vol){
 }
 
 // ================= ADVANCED ENGINE =================
-
-// Trade Quality
 function tradeQualityScore(pr, volBreak, agreement){
  return Math.min(100,(pr*40)+(volBreak?30:10)+(agreement*10));
 }
 
-// Auto Filter
 let autoConfig={minQuality:65,minProb:0.5};
+
 function passesAutoFilter(q,pr){
  return q>=autoConfig.minQuality && pr>=autoConfig.minProb;
 }
 
-// Entry Check
 function entryCheck(signal, price, history, s){
  let prev = history[s]?.[history[s].length-2];
  if(signal==="BUY" && prev && price<prev) return false;
@@ -82,26 +102,22 @@ function entryCheck(signal, price, history, s){
  return true;
 }
 
-// Risk Gate (simple safe)
 function riskGate(symbol, price, qty){
  let exposure = activeTrades.reduce((a,t)=>a+(t.entry*t.qty),0);
  return (exposure + price*qty) <= capital*0.6;
 }
 
-// Final Qty
 function finalQty(price, riskPct){
  if(!capital) return 1;
  return Math.max(1,Math.floor((capital*riskPct)/price));
 }
 
-// Smart Order
 async function smartOrderRoute(params){
  await kite.placeOrder("regular",params);
 }
 
-// ================= EXECUTION ENGINE =================
-function shouldEnterTrade({agreement, pr, quality, signal, symbol, price, depth}){
-
+// ================= EXECUTION =================
+function shouldEnterTrade({agreement, pr, quality, signal, symbol, price}){
  if(!signal) return false;
  if(!passesAutoFilter(quality, pr)) return false;
  if(!entryCheck(signal, price, history, symbol)) return false;
@@ -130,7 +146,7 @@ const STOCKS=["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","ITC","LT","
 
 // ================= DASHBOARD =================
 app.get("/",(req,res)=>{
- res.send(`<h2>FINAL ENGINE ACTIVE</h2><pre id="d"></pre>
+ res.send(`<h2>FINAL ENGINE + WEALTH LAYER</h2><pre id="d"></pre>
  <script>
  setInterval(async()=>{
   let r=await fetch('/performance');
@@ -194,17 +210,17 @@ setInterval(async()=>{
 
     let agreement = [momentum, volBreak, indexAlign].filter(x => x).length;
 
-let quality = tradeQualityScore(pr, volBreak, agreement);
+    let quality = tradeQualityScore(pr, volBreak, agreement);
 
-let signal = null;
+    let signal = null;
 
-if (
-  agreement >= 2 &&
-  pr >= 0.5 &&
-  quality >= 65
-){
-  signal = indexTrend === "UP" ? "BUY" : "SELL";
-}
+    if (
+      agreement >= 2 &&
+      pr >= 0.5 &&
+      quality >= 65
+    ){
+      signal = indexTrend === "UP" ? "BUY" : "SELL";
+    }
 
     scanOutput.push({
       symbol:s,price,probability:pr,volume:vol,
@@ -214,7 +230,7 @@ if (
 
     let result=shouldEnterTrade({
       agreement,pr,quality,signal,
-      symbol:s,price,depth:data.depth
+      symbol:s,price
     });
 
     if(result && !activeTrades.find(t=>t.symbol===s) && activeTrades.length<5){
@@ -251,6 +267,9 @@ if (
   let realized=closedTrades.reduce((a,b)=>a+b,0);
   pnl=realized+unreal;
 
+  // 🔥 UPDATE WEALTH LAYER
+  updateWealth(pnl);
+
  }catch(e){}
 },3000);
 
@@ -264,7 +283,10 @@ app.get("/performance",(req,res)=>{
   activeTradesCount:activeTrades.length,
   scan:scanOutput,
   activeTrades,
-  closedTrades
+  closedTrades,
+
+  // 🔥 NEW DASHBOARD FIELDS
+  wealth: wealthStats
  });
 });
 
