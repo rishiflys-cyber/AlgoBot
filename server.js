@@ -1,6 +1,7 @@
 
 require('dotenv').config();
 const express = require('express');
+const axios = require('axios');
 const KiteConnect = require("kiteconnect").KiteConnect;
 
 const app = express();
@@ -13,7 +14,6 @@ let accessToken = process.env.ACCESS_TOKEN;
 
 if (accessToken) kite.setAccessToken(accessToken);
 
-// ===== STATE =====
 let state = {
   capital: 0,
   pnl: 0,
@@ -22,13 +22,33 @@ let state = {
   winRate: 0,
   avgWin: 0,
   avgLoss: 0,
-  badPatterns: []
+  badPatterns: [],
+  serverIP: null,
+  mode: LIVE ? "LIVE" : "PAPER"
 };
 
 let history = [];
 let lastPrice = {};
 
-// ===== CAPITAL =====
+// LOGIN
+app.get('/login', (req, res) => res.redirect(kite.getLoginURL()));
+
+app.get('/redirect', async (req, res) => {
+  try {
+    const session = await kite.generateSession(req.query.request_token, process.env.KITE_API_SECRET);
+    accessToken = session.access_token;
+    kite.setAccessToken(accessToken);
+
+    const ip = await axios.get("https://api.ipify.org?format=json");
+    state.serverIP = ip.data.ip;
+
+    res.send("Login success | IP: " + state.serverIP);
+  } catch (e) {
+    res.send("Login failed: " + e.message);
+  }
+});
+
+// CAPITAL
 async function updateCapital() {
   try {
     const m = await kite.getMargins();
@@ -36,43 +56,30 @@ async function updateCapital() {
   } catch {}
 }
 
-// ===== STATS =====
+// STATS
 function updateStats() {
-  if (!history.length) return;
-
   const wins = history.filter(t => t.pnl > 0);
   const losses = history.filter(t => t.pnl <= 0);
 
-  state.winRate = wins.length / history.length;
+  state.winRate = wins.length / (history.length || 1);
   state.avgWin = wins.length ? wins.reduce((a,b)=>a+b.pnl,0)/wins.length : 0;
   state.avgLoss = losses.length ? losses.reduce((a,b)=>a+b.pnl,0)/losses.length : 0;
 }
 
-// ===== PATTERN DETECTION =====
+// PATTERN
 function analyzePatterns() {
   const lowScoreLoss = history.filter(t => t.score < 3 && t.pnl < 0).length;
-  if (lowScoreLoss > 5) {
+  if (lowScoreLoss > 5 && !state.badPatterns.includes("LOW_SCORE")) {
     state.badPatterns.push("LOW_SCORE");
   }
 }
 
-// ===== FILTER =====
 function allowTrade(score) {
   if (state.badPatterns.includes("LOW_SCORE") && score < 3) return false;
   return true;
 }
 
-// ===== SIGNAL =====
-function getScore(price, prev) {
-  if (!prev) return 0;
-  let score = 0;
-  if (price > prev) score++;
-  if (price > prev * 1.002) score++;
-  if (price > prev * 1.004) score++;
-  return score;
-}
-
-// ===== EXECUTION =====
+// EXECUTION
 async function executeOrder(symbol, qty, side) {
   if (!LIVE) return;
   const [exchange, tradingsymbol] = symbol.split(":");
@@ -88,7 +95,17 @@ async function executeOrder(symbol, qty, side) {
   } catch {}
 }
 
-// ===== LOOP =====
+// SIGNAL
+function getScore(price, prev) {
+  if (!prev) return 0;
+  let score = 0;
+  if (price > prev) score++;
+  if (price > prev * 1.002) score++;
+  if (price > prev * 1.004) score++;
+  return score;
+}
+
+// LOOP
 setInterval(async () => {
   if (!accessToken) return;
 
@@ -124,7 +141,6 @@ setInterval(async () => {
     }
   }
 
-  // exits
   state.activeTrades = state.activeTrades.filter(tr => {
     const cp = lastPrice[tr.symbol];
 
@@ -149,9 +165,8 @@ setInterval(async () => {
 
 }, 3000);
 
-// ===== ROUTES =====
+// ROUTES
 app.get('/', (req, res) => res.json(state));
-
 app.get('/performance', (req, res) => res.json(state));
 
-app.listen(PORT, () => console.log("TRADE INTELLIGENCE V6 RUNNING"));
+app.listen(PORT, () => console.log("FINAL V7 RUNNING"));
