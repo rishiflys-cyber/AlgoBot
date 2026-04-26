@@ -6,89 +6,64 @@ const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const RESULTS_FILE = "./research_results.json";
-
-// ===== LOAD/SAVE =====
-function loadResults() {
-  try {
-    return JSON.parse(fs.readFileSync(RESULTS_FILE));
-  } catch {
-    return [];
-  }
+// ===== LOAD HISTORICAL DATA (CSV expected) =====
+function loadCSV(path) {
+  const data = fs.readFileSync(path, 'utf-8').split('\n').slice(1);
+  return data.map(row => {
+    const [date, open, high, low, close, volume] = row.split(',');
+    return {
+      date,
+      open: parseFloat(open),
+      high: parseFloat(high),
+      low: parseFloat(low),
+      close: parseFloat(close),
+      volume: parseFloat(volume)
+    };
+  }).filter(d => !isNaN(d.close));
 }
 
-function saveResults(data) {
-  fs.writeFileSync(RESULTS_FILE, JSON.stringify(data, null, 2));
-}
-
-let results = loadResults();
-
-// ===== STRATEGY VARIATIONS =====
-function generateStrategyVariant() {
-  return {
-    id: Date.now(),
-    momentumThreshold: 0.5 + Math.random() * 0.3,
-    breakoutThreshold: 1 + Math.random()
-  };
-}
-
-// ===== BACKTEST =====
-function runBacktest(strategy) {
+// ===== STRATEGY =====
+function strategy(data) {
+  let trades = [];
   let pnl = 0;
-  let wins = 0;
 
-  let price = 1000;
+  for (let i = 1; i < data.length; i++) {
+    const prev = data[i - 1];
+    const curr = data[i];
 
-  for (let i = 0; i < 100; i++) {
-    const change = (Math.random() - 0.5) * 20;
-    price += change;
+    const momentum = curr.close > prev.close;
+    const breakout = curr.volume > prev.volume;
 
-    const momentum = Math.random();
-    const breakout = 1 + Math.random();
-
-    if (momentum > strategy.momentumThreshold && breakout > strategy.breakoutThreshold) {
-      pnl += change;
-      if (change > 0) wins++;
+    if (momentum && breakout) {
+      const tradePnl = curr.close - prev.close;
+      pnl += tradePnl;
+      trades.push({ pnl: tradePnl, date: curr.date });
     }
   }
 
-  return {
-    pnl,
-    winRate: wins / 100
-  };
+  return { pnl, trades };
 }
 
-// ===== MAIN LOOP =====
-setInterval(() => {
+// ===== BACKTEST RUN =====
+let results = {};
 
-  const strat = generateStrategyVariant();
-  const result = runBacktest(strat);
-
-  results.push({
-    ...strat,
-    ...result,
-    timestamp: new Date().toISOString()
-  });
-
-  // keep top 50 by pnl
-  results = results.sort((a,b)=>b.pnl-a.pnl).slice(0,50);
-
-  saveResults(results);
-
-}, 3000);
+try {
+  const data = loadCSV('./data.csv');
+  results = strategy(data);
+} catch (e) {
+  console.log("No data.csv found. Upload historical data.");
+}
 
 // ===== ROUTES =====
 app.get('/', (req, res) => {
   res.json({
-    topStrategies: results.slice(0,10)
+    totalPnL: results.pnl || 0,
+    trades: results.trades ? results.trades.length : 0
   });
 });
 
-app.get('/report', (req, res) => {
-  res.json({
-    totalTested: results.length,
-    best: results[0] || null
-  });
+app.get('/trades', (req, res) => {
+  res.json(results.trades || []);
 });
 
-app.listen(PORT, () => console.log("Research Workflow Running"));
+app.listen(PORT, () => console.log("Real Backtest Engine Running"));
