@@ -1,73 +1,49 @@
 
 require('dotenv').config();
 const express = require('express');
-const fs = require('fs');
 const axios = require('axios');
 const KiteConnect = require("kiteconnect").KiteConnect;
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const TOKEN_FILE = "access_token.json";
+const LIVE = process.env.LIVE_TRADING === "true";
 
 let kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
-let accessToken = null;
+let accessToken = process.env.ACCESS_TOKEN;
 
-// ===== LOAD TOKEN IF EXISTS =====
-if (fs.existsSync(TOKEN_FILE)) {
-  const saved = JSON.parse(fs.readFileSync(TOKEN_FILE));
-  accessToken = saved.token;
-  kite.setAccessToken(accessToken);
-  console.log("Loaded saved access token");
-}
+if (accessToken) kite.setAccessToken(accessToken);
 
-// ===== STATE =====
 let state = {
   capital: 0,
   pnl: 0,
-  serverIP: null,
-  mode: "PAPER"
+  activeTrades: [],
+  closedTrades: [],
+  mode: LIVE ? "LIVE" : "PAPER",
+  serverIP: null
 };
 
-// ===== LOGIN =====
-app.get('/login', (req, res) => {
-  res.redirect(kite.getLoginURL());
-});
+let lastPrice = {};
+
+// LOGIN
+app.get('/login', (req, res) => res.redirect(kite.getLoginURL()));
 
 app.get('/redirect', async (req, res) => {
   try {
     const session = await kite.generateSession(req.query.request_token, process.env.KITE_API_SECRET);
-
     accessToken = session.access_token;
     kite.setAccessToken(accessToken);
-
-    // SAVE TOKEN
-    fs.writeFileSync(TOKEN_FILE, JSON.stringify({ token: accessToken }));
 
     const ip = await axios.get("https://api.ipify.org?format=json");
     state.serverIP = ip.data.ip;
 
-    res.send("Login saved permanently | IP: " + state.serverIP);
+    res.send("Login success | IP: " + state.serverIP);
   } catch (e) {
     res.send("Login failed: " + e.message);
   }
 });
 
-// ===== AUTO VALIDATION =====
-async function validateSession() {
-  if (!accessToken) return false;
-
-  try {
-    await kite.getProfile();
-    return true;
-  } catch {
-    console.log("Session expired, login required");
-    accessToken = null;
-    return false;
-  }
-}
-
-// ===== CAPITAL =====
+// CAPITAL
 async function updateCapital() {
   try {
     const m = await kite.getMargins();
@@ -75,24 +51,93 @@ async function updateCapital() {
   } catch {}
 }
 
-// ===== LOOP =====
+// SEBI COMPLIANT ORDER
+async function executeOrder(symbol, qty, side) {
+  if (!LIVE) {
+    console.log("PAPER:", symbol, side, qty);
+    return;
+  }
+
+  const [exchange, tradingsymbol] = symbol.split(":");
+
+  try {
+    await kite.placeOrder("regular", {
+      exchange,
+      tradingsymbol,
+      transaction_type: side,
+      quantity: qty,
+      product: "MIS",
+      order_type: "MARKET",
+      market_protection: 2   // ✅ SEBI compliant
+    });
+  } catch (e) {
+    console.log("ORDER ERROR:", e.message);
+  }
+}
+
+// SIMPLE SIGNAL
+function getSignal(price, prev) {
+  if (!prev) return null;
+  if (price > prev * 1.002) return "BUY";
+  if (price < prev * 0.998) return "SELL";
+  return null;
+}
+
+// LOOP
 setInterval(async () => {
-  const valid = await validateSession();
-  if (!valid) return;
+  if (!accessToken) return;
 
   await updateCapital();
 
-}, 5000);
+  const symbols = ["NSE:RELIANCE","NSE:TCS","NSE:INFY"];
+  const quotes = await kite.getQuote(symbols);
 
-// ===== ROUTES =====
-app.get('/', (req, res) => res.json(state));
+  for (const sym of symbols) {
+    const q = quotes[sym];
+    if (!q) continue;
 
-app.get('/performance', (req, res) => {
-  res.json({
-    capital: state.capital,
-    sessionActive: !!accessToken,
-    time: new Date().toISOString()
+    const price = q.last_price;
+    const signal = getSignal(price, lastPrice[sym]);
+
+    lastPrice[sym] = price;
+
+    if (signal && state.activeTrades.length < 2) {
+      const qty = Math.max(1, Math.floor((state.capital * 0.02) / price));
+
+      await executeOrder(sym, qty, signal);
+
+      state.activeTrades.push({
+        symbol: sym,
+        entry: price,
+        qty,
+        side: signal,
+        sl: price * 0.995,
+        target: price * 1.015
+      });
+    }
+  }
+
+  // EXIT
+  state.activeTrades = state.activeTrades.filter(tr => {
+    const cp = lastPrice[tr.symbol];
+
+    if (cp >= tr.target || cp <= tr.sl) {
+      const pnl = (cp - tr.entry) * tr.qty;
+      state.pnl += pnl;
+
+      executeOrder(tr.symbol, tr.qty, tr.side === "BUY" ? "SELL" : "BUY");
+
+      state.closedTrades.push({ ...tr, exit: cp, pnl });
+      return false;
+    }
+
+    return true;
   });
-});
 
-app.listen(PORT, () => console.log("PERSISTENT LOGIN SYSTEM RUNNING"));
+}, 3000);
+
+// ROUTES
+app.get('/', (req, res) => res.json(state));
+app.get('/performance', (req, res) => res.json(state));
+
+app.listen(PORT, () => console.log("LIVE SEBI SYSTEM RUNNING"));
