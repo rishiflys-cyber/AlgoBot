@@ -1,7 +1,7 @@
 
 require('dotenv').config();
 const express = require('express');
-const axios = require('axios');
+const fs = require('fs');
 const KiteConnect = require("kiteconnect").KiteConnect;
 
 const app = express();
@@ -20,48 +20,14 @@ let state = {
   pnl: 0,
   activeTrades: [],
   closedTrades: [],
-  killSwitch: false,
-  alert: false,
-  mode: LIVE ? "LIVE" : "PAPER",
-  serverIP: null
+  winRate: 0,
+  avgWin: 0,
+  avgLoss: 0,
+  mode: LIVE ? "LIVE" : "PAPER"
 };
 
-let priceHistory = {};
+let history = [];
 let lastPrice = {};
-
-// ===== LOGIN ROUTES (FIXED) =====
-app.get('/login', (req, res) => {
-  try {
-    return res.redirect(kite.getLoginURL());
-  } catch (e) {
-    return res.send("Login error: " + e.message);
-  }
-});
-
-app.get('/redirect', async (req, res) => {
-  try {
-    const token = req.query.request_token;
-    if (!token) return res.send("Missing request_token");
-
-    const session = await kite.generateSession(token, process.env.KITE_API_SECRET);
-    accessToken = session.access_token;
-    kite.setAccessToken(accessToken);
-
-    await fetchIP();
-
-    res.send("Login success | IP: " + state.serverIP);
-  } catch (e) {
-    res.send("Login failed: " + e.message);
-  }
-});
-
-// ===== FETCH IP =====
-async function fetchIP() {
-  try {
-    const res = await axios.get("https://api.ipify.org?format=json");
-    state.serverIP = res.data.ip;
-  } catch {}
-}
 
 // ===== CAPITAL =====
 async function updateCapital() {
@@ -69,6 +35,30 @@ async function updateCapital() {
     const m = await kite.getMargins();
     state.capital = m?.equity?.available?.cash || m?.equity?.net || state.capital;
   } catch {}
+}
+
+// ===== STATS ENGINE =====
+function updateStats() {
+  if (history.length === 0) return;
+
+  const wins = history.filter(t => t.pnl > 0);
+  const losses = history.filter(t => t.pnl <= 0);
+
+  state.winRate = wins.length / history.length;
+  state.avgWin = wins.length ? wins.reduce((a,b)=>a+b.pnl,0)/wins.length : 0;
+  state.avgLoss = losses.length ? losses.reduce((a,b)=>a+b.pnl,0)/losses.length : 0;
+}
+
+// ===== ADAPTIVE STRATEGY =====
+function getDynamicParams() {
+  // adjust based on real performance
+  if (state.winRate > 0.6) {
+    return { sl: 0.007, target: 0.02, risk: 0.03 };
+  }
+  if (state.winRate < 0.4) {
+    return { sl: 0.004, target: 0.01, risk: 0.01 };
+  }
+  return { sl: 0.005, target: 0.015, risk: 0.02 };
 }
 
 // ===== EXECUTION =====
@@ -94,19 +84,25 @@ async function executeOrder(symbol, qty, side) {
   }
 }
 
-// ===== SIMPLE STRATEGY =====
+// ===== SIGNAL (IMPROVED) =====
 function getSignal(price, prev) {
   if (!prev) return null;
-  if (price > prev * 1.002) return "BUY";
-  if (price < prev * 0.998) return "SELL";
+
+  const change = (price - prev) / prev;
+
+  if (change > 0.003) return "BUY";
+  if (change < -0.003) return "SELL";
+
   return null;
 }
 
 // ===== LOOP =====
 setInterval(async () => {
-  if (!accessToken || state.killSwitch) return;
+  if (!accessToken) return;
 
   await updateCapital();
+
+  const params = getDynamicParams();
 
   const symbols = ["NSE:RELIANCE","NSE:TCS","NSE:INFY"];
   const quotes = await kite.getQuote(symbols);
@@ -121,7 +117,7 @@ setInterval(async () => {
     lastPrice[sym] = price;
 
     if (signal && state.activeTrades.length < 2) {
-      const qty = Math.max(1, Math.floor((state.capital * 0.02) / price));
+      const qty = Math.max(1, Math.floor((state.capital * params.risk) / price));
 
       await executeOrder(sym, qty, signal);
 
@@ -130,8 +126,8 @@ setInterval(async () => {
         entry: price,
         qty,
         side: signal,
-        sl: price * 0.995,
-        target: price * 1.015
+        sl: price * (1 - params.sl),
+        target: price * (1 + params.target)
       });
     }
   }
@@ -143,6 +139,11 @@ setInterval(async () => {
     if (cp >= tr.target || cp <= tr.sl) {
       const pnl = (cp - tr.entry) * tr.qty;
       state.pnl += pnl;
+
+      history.push({ pnl });
+      if (history.length > 300) history.shift();
+
+      updateStats();
 
       executeOrder(tr.symbol, tr.qty, tr.side === "BUY" ? "SELL" : "BUY");
 
@@ -162,14 +163,13 @@ app.get('/performance', (req, res) => {
   res.json({
     capital: state.capital,
     pnl: state.pnl,
-    activeTrades: state.activeTrades.length,
-    closedTrades: state.closedTrades.length,
+    winRate: state.winRate,
+    avgWin: state.avgWin,
+    avgLoss: state.avgLoss,
+    trades: history.length,
     mode: state.mode,
-    ip: state.serverIP,
     time: new Date().toISOString()
   });
 });
 
-fetchIP();
-
-app.listen(PORT, () => console.log("FINAL FIXED SYSTEM RUNNING"));
+app.listen(PORT, () => console.log("LIVE OPTIMIZED SYSTEM RUNNING"));
