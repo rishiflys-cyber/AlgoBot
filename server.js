@@ -19,27 +19,27 @@ if(fs.existsSync(TOKEN_FILE)){
   const saved=JSON.parse(fs.readFileSync(TOKEN_FILE));
   accessToken=saved.token;
   kite.setAccessToken(accessToken);
- }catch(e){ console.log("TOKEN LOAD ERROR"); }
+ }catch{}
 }
 
 let state={
  capital:0,
  pnl:0,
  regime:"UNKNOWN",
+ strategies:{
+  momentum:{weight:0.4, pnl:0},
+  breakout:{weight:0.3, pnl:0},
+  meanReversion:{weight:0.3, pnl:0}
+ },
  activeTrades:[],
  closedTrades:[],
- winRate:0,
- avgWin:0,
- avgLoss:0,
  serverIP:null,
  mode:LIVE?"LIVE":"PAPER"
 };
 
-let tradeHistory=[];
 let lastPrice={};
-let dynamicThreshold=3;
 
-// LOGIN
+// login
 app.get('/login',(req,res)=>res.redirect(kite.getLoginURL()));
 
 app.get('/redirect',async(req,res)=>{
@@ -54,59 +54,35 @@ app.get('/redirect',async(req,res)=>{
 
   res.send("Login success | IP: "+state.serverIP);
  }catch(e){
-  console.log("LOGIN ERROR:",e.message);
   res.send("Login failed");
  }
 });
 
-// CAPITAL SAFE
+// capital
 async function updateCapital(){
  try{
   const m=await kite.getMargins();
-  state.capital=m?.equity?.available?.cash || m?.equity?.net || state.capital;
- }catch(e){
-  console.log("MARGIN ERROR:",e.message);
- }
+  state.capital=m?.equity?.available?.cash||state.capital;
+ }catch{}
 }
 
-// REGIME SAFE
-function detectRegime(q){
- try{
-  const range=(q.ohlc.high - q.ohlc.low)/q.last_price;
-  if(range>0.015) return "TRENDING";
-  if(range<0.007) return "SIDEWAYS";
-  return "NORMAL";
- }catch{ return "NORMAL"; }
-}
-
-// SCORE SAFE
-function getScore(q,prev){
+// strategies
+function momentum(q,prev){
  if(!prev) return 0;
- let s=0;
- if(q.last_price>prev) s++;
- if(q.ohlc && q.last_price>q.ohlc.open) s++;
- if(q.ohlc && q.last_price>q.ohlc.high*0.995) s++;
- if(q.ohlc && (q.ohlc.high-q.ohlc.low)/q.last_price>0.01) s++;
- return s;
+ return q.last_price>prev ? 1 : 0;
 }
 
-// ADAPTIVE SAFE
-function adapt(){
- if(tradeHistory.length<10) return;
-
- const wins=tradeHistory.filter(t=>t.pnl>0);
- const losses=tradeHistory.filter(t=>t.pnl<=0);
-
- state.winRate=wins.length/(tradeHistory.length||1);
- state.avgWin=wins.length?wins.reduce((a,b)=>a+b.pnl,0)/wins.length:0;
- state.avgLoss=losses.length?losses.reduce((a,b)=>a+b.pnl,0)/losses.length:0;
-
- if(state.winRate<0.4) dynamicThreshold=4;
- else if(state.winRate>0.6) dynamicThreshold=2;
- else dynamicThreshold=3;
+function breakout(q){
+ if(!q.ohlc) return 0;
+ return q.last_price > q.ohlc.high*0.995 ? 1 : 0;
 }
 
-// EXECUTION SAFE
+function meanReversion(q){
+ if(!q.ohlc) return 0;
+ return q.last_price < q.ohlc.low*1.005 ? 1 : 0;
+}
+
+// execution
 async function executeOrder(sym,qty,side){
  try{
   if(!LIVE) return;
@@ -120,12 +96,10 @@ async function executeOrder(sym,qty,side){
    order_type:"MARKET",
    market_protection:2
   });
- }catch(e){
-  console.log("ORDER ERROR:",e.message);
- }
+ }catch{}
 }
 
-// MAIN LOOP SAFE
+// loop
 setInterval(async()=>{
  try{
   if(!accessToken) return;
@@ -137,45 +111,48 @@ setInterval(async()=>{
 
   for(const sym of stocks){
    const q=quotes[sym];
-   if(!q || !q.last_price) continue;
+   if(!q||!q.last_price) continue;
 
-   state.regime=detectRegime(q);
+   const m=momentum(q,lastPrice[sym]);
+   const b=breakout(q);
+   const r=meanReversion(q);
 
-   const score=getScore(q,lastPrice[sym]);
    lastPrice[sym]=q.last_price;
 
-   if(state.regime==="SIDEWAYS" && score<4) continue;
-   if(state.regime==="TRENDING" && score<2) continue;
-   if(state.regime==="NORMAL" && score<dynamicThreshold) continue;
+   let strategy=null;
 
-   if(state.activeTrades.length>=2) break;
+   if(m && state.strategies.momentum.weight>0.3) strategy="momentum";
+   else if(b) strategy="breakout";
+   else if(r) strategy="meanReversion";
 
-   const qty=Math.max(1,Math.floor((state.capital*0.01)/q.last_price));
-   if(qty<=0) continue;
+   if(!strategy) continue;
+
+   if(state.activeTrades.length>=3) break;
+
+   const alloc=state.capital * state.strategies[strategy].weight;
+   const qty=Math.max(1,Math.floor((alloc*0.02)/q.last_price));
 
    await executeOrder(sym,qty,"BUY");
 
    state.activeTrades.push({
     symbol:sym,
+    strategy,
     entry:q.last_price,
     qty,
     sl:q.last_price*0.995,
-    target:q.last_price*1.02,
-    score
+    target:q.last_price*1.02
    });
   }
 
-  // EXIT SAFE
+  // exit
   state.activeTrades=state.activeTrades.filter(tr=>{
    const cp=lastPrice[tr.symbol];
    if(!cp) return true;
 
-   if(cp>=tr.target || cp<=tr.sl){
+   if(cp>=tr.target||cp<=tr.sl){
     const pnl=(cp-tr.entry)*tr.qty;
     state.pnl+=pnl;
-
-    tradeHistory.push({pnl,score:tr.score});
-    adapt();
+    state.strategies[tr.strategy].pnl+=pnl;
 
     executeOrder(tr.symbol,tr.qty,"SELL");
 
@@ -185,13 +162,20 @@ setInterval(async()=>{
    return true;
   });
 
+  // rebalance weights (simple adaptive)
+  let totalPnl=Object.values(state.strategies).reduce((a,b)=>a+b.pnl,0)||1;
+
+  for(let key in state.strategies){
+   state.strategies[key].weight = Math.max(0.1, state.strategies[key].pnl/totalPnl);
+  }
+
  }catch(e){
-  console.log("LOOP ERROR:",e.message);
+  console.log("LOOP ERROR",e.message);
  }
 },3000);
 
-// ROUTES
+// routes
 app.get('/',(req,res)=>res.json(state));
 app.get('/performance',(req,res)=>res.json(state));
 
-app.listen(PORT,()=>console.log("V17 FIXED RUNNING"));
+app.listen(PORT,()=>console.log("PORTFOLIO V18 RUNNING"));
