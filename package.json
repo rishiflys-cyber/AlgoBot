@@ -1,5 +1,5 @@
 {
-  "name": "algobot-kite-full",
+  "name": "algobot-strategy-engine",
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {

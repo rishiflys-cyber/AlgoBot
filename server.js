@@ -1,24 +1,64 @@
-// SIMPLE WORKING SERVER WITH /performance ROUTE
-
-require("dotenv").config();
-const express = require("express");
+require('dotenv').config();
+const express = require('express');
+const KiteConnect = require("kiteconnect").KiteConnect;
 
 const app = express();
+const PORT = process.env.PORT || 3000;
 
-// ROOT
-app.get("/", (req, res) => {
-  res.send("AlgoBot Running");
+let kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
+
+// 🔒 Persist token in memory (Railway-safe during uptime)
+let accessToken = process.env.ACCESS_TOKEN || null;
+
+if (accessToken) {
+  kite.setAccessToken(accessToken);
+}
+
+// ===== LOGIN =====
+app.get('/login', (req, res) => {
+  res.redirect(kite.getLoginURL());
 });
 
-// PERFORMANCE ROUTE (FIX)
-app.get("/performance", (req, res) => {
+// ===== REDIRECT =====
+app.get('/redirect', async (req, res) => {
+  try {
+    const session = await kite.generateSession(
+      req.query.request_token,
+      process.env.KITE_API_SECRET
+    );
+
+    accessToken = session.access_token;
+    kite.setAccessToken(accessToken);
+
+    console.log("✅ Access Token Set:", accessToken);
+
+    res.send("Login success. Token stored.");
+  } catch (err) {
+    console.error("❌ Login Error:", err.message);
+    res.send("Login failed");
+  }
+});
+
+// ===== DASHBOARD =====
+app.get('/', async (req, res) => {
+  let capital = 0;
+
+  if (accessToken) {
+    try {
+      const margins = await kite.getMargins();
+      console.log("💰 Margins Response:", margins);
+
+      capital = margins.equity.available.cash || 0;
+
+    } catch (err) {
+      console.error("❌ Margin Fetch Error:", err.message);
+    }
+  }
+
   res.json({
-    status: "working",
-    time: new Date()
+    capital,
+    accessToken: accessToken ? "ACTIVE" : "NOT_LOGGED_IN"
   });
 });
 
-// START SERVER
-app.listen(process.env.PORT || 3000, () => {
-  console.log("Server running...");
-});
+app.listen(PORT, () => console.log("Server running on " + PORT));

@@ -1,11 +1,16 @@
-# AlgoBot Kite Full Integration
+# Fix: Capital + Session Persistence
 
-## Flow
-1. /login
-2. login zerodha
-3. redirect handled
-4. capital fetched live
+## What this fixes
+- Proper accessToken handling
+- Margin API logging
+- Prevent silent failures
 
-## Run
-npm install
-npm start
+## Steps
+1. Replace server.js
+2. Deploy
+3. Hit /login again
+4. Check logs in Railway
+
+## Debug
+- See logs for margins
+- Confirm capital > 0
