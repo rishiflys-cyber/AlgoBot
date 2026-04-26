@@ -1,5 +1,5 @@
 {
-  "name": "algobot-strategy-engine",
+  "name": "algobot-risk-execution",
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {

@@ -1,16 +1,17 @@
-# Fix: Capital + Session Persistence
+# Risk + Execution Layer
 
-## What this fixes
-- Proper accessToken handling
-- Margin API logging
-- Prevent silent failures
+## Features
+- Position sizing (2%)
+- Stop loss / target
+- Max trades = 5
+- Live PnL tracking
+- Trade lifecycle
 
-## Steps
-1. Replace server.js
-2. Deploy
-3. Hit /login again
-4. Check logs in Railway
+## Status
+Step 7/100
+Institutional Rating ~6.5/10
 
-## Debug
-- See logs for margins
-- Confirm capital > 0
+## Next
+- Replace random data with real market feed
+- Add multi-strategy filtering
+- Add volatility-based SL
