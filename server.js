@@ -1,4 +1,4 @@
-// STEP 1: SIGNAL + QUALITY ENGINE (NO DOWNGRADE)
+// STEP 2: MARKET REGIME ENGINE ADDED (NO DOWNGRADE)
 
 require("dotenv").config();
 const express = require("express");
@@ -13,6 +13,7 @@ let access_token=null, BOT_ACTIVE=false;
 let capital=0, pnl=0;
 let activeTrades=[], closedTrades=[];
 let history={}, volumeHistory={}, scanOutput=[];
+let indexHistory=[];
 
 // LOGIN
 app.get("/login",(req,res)=> res.redirect(kite.getLoginURL()));
@@ -48,9 +49,20 @@ function volumeBreakout(symbol, vol){
  return vol>avg*1.5;
 }
 
-// STEP 1 ADDITION
 function tradeQualityScore(pr, volBreak, agreement){
  return Math.min(100,(pr*40)+(volBreak?30:10)+(agreement*10));
+}
+
+// 🔥 STEP 2 ADDITION — REGIME ENGINE
+function detectRegime(prices){
+ if(prices.length<5) return "NORMAL";
+ let max=Math.max(...prices);
+ let min=Math.min(...prices);
+ let range=(max-min)/min;
+
+ if(range<0.002) return "SIDEWAYS";
+ if(range>0.01) return "VOLATILE";
+ return "NORMAL";
 }
 
 // STOCKS
@@ -62,6 +74,17 @@ setInterval(async()=>{
 
  try{
   await updateCapital();
+
+  // INDEX TRACKING
+  const idxData = await kite.getLTP(["NSE:NIFTY 50"]);
+  let idxPrice = idxData["NSE:NIFTY 50"]?.last_price;
+  if(idxPrice){
+    indexHistory.push(idxPrice);
+    if(indexHistory.length>6) indexHistory.shift();
+  }
+
+  let regime = detectRegime(indexHistory);
+
   const quotes=await kite.getQuote(STOCKS.map(s=>"NSE:"+s));
   scanOutput=[];
 
@@ -90,7 +113,13 @@ setInterval(async()=>{
 
     let signal=null;
 
-    if(agreement>=1 && pr>=0.5 && quality>=65){
+    // 🔥 REGIME FILTER APPLIED
+    if(
+      regime!=="SIDEWAYS" &&
+      agreement>=1 &&
+      pr>=(regime==="VOLATILE"?0.6:0.5) &&
+      quality>=(regime==="VOLATILE"?70:65)
+    ){
       signal="BUY";
     }
 
@@ -99,7 +128,7 @@ setInterval(async()=>{
       price,
       probability:pr,
       volume:vol,
-      volumeBreakout:volBreak,
+      regime,
       agreement,
       quality,
       signal
