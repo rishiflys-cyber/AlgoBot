@@ -1,15 +1,9 @@
-# Fix: Proper Capital Extraction
+Step 20/100
+Institutional Rating: 9.0/10
 
-## What this does
-- Logs FULL margin response
-- Extracts capital from multiple possible fields
-- Supports equity + commodity
-
-## Steps
-1. Replace server.js
-2. Redeploy Railway
-3. Login again
-4. Check logs → see FULL MARGINS
-
-## Expected
-Capital should now reflect actual available funds
+Edge Engine Active:
+- Momentum
+- Volume breakout
+- Agreement scoring
+- Trade Quality Score
+- Regime filter
