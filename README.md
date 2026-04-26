@@ -1,17 +1,12 @@
-# Risk + Execution Layer
+# Fix: /performance + capital debug
 
-## Features
-- Position sizing (2%)
-- Stop loss / target
-- Max trades = 5
-- Live PnL tracking
-- Trade lifecycle
+## What fixed
+- /performance route added
+- margin logs enabled
+- access token validation
 
-## Status
-Step 7/100
-Institutional Rating ~6.5/10
-
-## Next
-- Replace random data with real market feed
-- Add multi-strategy filtering
-- Add volatility-based SL
+## Step
+1. Replace server.js
+2. Redeploy
+3. Hit /login again
+4. Check / and /performance

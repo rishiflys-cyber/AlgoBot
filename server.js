@@ -10,14 +10,13 @@ let accessToken = process.env.ACCESS_TOKEN || null;
 
 if (accessToken) kite.setAccessToken(accessToken);
 
-// ===== STATE =====
+// STATE
 let capital = 0;
 let pnl = 0;
 let activeTrades = [];
 let closedTrades = [];
-let maxTrades = 5;
 
-// ===== LOGIN =====
+// LOGIN
 app.get('/login', (req, res) => res.redirect(kite.getLoginURL()));
 
 app.get('/redirect', async (req, res) => {
@@ -25,75 +24,45 @@ app.get('/redirect', async (req, res) => {
     const session = await kite.generateSession(req.query.request_token, process.env.KITE_API_SECRET);
     accessToken = session.access_token;
     kite.setAccessToken(accessToken);
+    console.log("TOKEN SET");
     res.send("Login success");
-  } catch {
+  } catch (e) {
+    console.error(e.message);
     res.send("Login failed");
   }
 });
 
-// ===== DASHBOARD =====
+// DASHBOARD
 app.get('/', async (req, res) => {
   if (accessToken) {
     try {
       const margins = await kite.getMargins();
-      capital = margins.equity.available.cash;
-    } catch {}
+      console.log("MARGINS:", margins);
+      capital = margins.equity.available.cash || 0;
+    } catch (e) {
+      console.error("MARGIN ERROR:", e.message);
+    }
   }
 
   res.json({
     capital,
     pnl,
     activeTrades,
-    closedTrades
+    closedTrades,
+    access: accessToken ? "ACTIVE" : "NO"
   });
 });
 
-// ===== RISK + EXECUTION LOOP =====
-setInterval(async () => {
-  if (!accessToken) return;
-
-  if (activeTrades.length >= maxTrades) return;
-
-  const symbol = "RELIANCE";
-  const price = Math.random() * 1000;
-
-  const probability = Math.random();
-
-  if (probability > 0.7) {
-    const qty = Math.floor((capital * 0.02) / price);
-
-    const stopLoss = price * 0.998;
-    const target = price * 1.003;
-
-    activeTrades.push({
-      symbol,
-      entry: price,
-      qty,
-      stopLoss,
-      target
-    });
-  }
-
-  // ===== EXIT LOGIC =====
-  activeTrades = activeTrades.filter(trade => {
-    const currentPrice = Math.random() * 1000;
-
-    if (currentPrice <= trade.stopLoss || currentPrice >= trade.target) {
-      const tradePnl = (currentPrice - trade.entry) * trade.qty;
-      pnl += tradePnl;
-
-      closedTrades.push({
-        ...trade,
-        exit: currentPrice,
-        pnl: tradePnl
-      });
-
-      return false;
-    }
-
-    return true;
+// PERFORMANCE ROUTE (FIX)
+app.get('/performance', (req, res) => {
+  res.json({
+    status: "working",
+    time: new Date().toISOString(),
+    capital,
+    pnl,
+    activeTradesCount: activeTrades.length,
+    closedTradesCount: closedTrades.length
   });
-
-}, 3000);
+});
 
 app.listen(PORT, () => console.log("Running " + PORT));
