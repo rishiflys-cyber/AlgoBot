@@ -1,4 +1,4 @@
-// STEP 8: WEALTH ENGINE (TAX + WITHDRAWAL) — NO DOWNGRADE
+// STEP 9: CAPITAL SCALING ENGINE (NO DOWNGRADE)
 
 require("dotenv").config();
 const express = require("express");
@@ -16,29 +16,26 @@ let history={}, volumeHistory={}, scanOutput=[];
 let indexHistory=[];
 let lossTracker={};
 
-// 🔥 PERFORMANCE
+// PERFORMANCE
 let perfStats={totalTrades:0,wins:0,losses:0,totalWin:0,totalLoss:0};
 
-// 🔥 STEP 8 — WEALTH ENGINE
-let wealthConfig = {
- taxRate: 0.30,
- withdrawRate: 0.20
-};
+// WEALTH
+let wealthConfig={ taxRate:0.30, withdrawRate:0.20 };
+let wealthStats={ totalProfit:0, taxReserve:0, withdrawable:0, reinvestable:0 };
 
-let wealthStats = {
- totalProfit:0,
- taxReserve:0,
- withdrawable:0,
- reinvestable:0
-};
+// 🔥 STEP 9 — CAPITAL SCALING
+let baseRisk=0.02;        // base risk per trade
+let dynamicRisk=0.02;     // adjusted risk
 
-function updateWealth(totalPnl){
- if(totalPnl <= 0) return;
+function updateRisk(){
+ let { expectancy } = getMetrics();
 
- wealthStats.totalProfit = totalPnl;
- wealthStats.taxReserve = totalPnl * wealthConfig.taxRate;
- wealthStats.withdrawable = totalPnl * wealthConfig.withdrawRate;
- wealthStats.reinvestable = totalPnl - wealthStats.taxReserve - wealthStats.withdrawable;
+ // scale risk based on edge
+ if(expectancy > 0){
+   dynamicRisk = Math.min(0.05, baseRisk + 0.01); // scale up
+ } else {
+   dynamicRisk = Math.max(0.01, baseRisk - 0.01); // scale down
+ }
 }
 
 // LOGIN
@@ -106,10 +103,16 @@ function portfolioAllocator(quality){
  return 0.02;
 }
 
+// 🔥 UPDATED position sizing with scaling
 function positionSize(price, quality){
  let allocPct = portfolioAllocator(quality);
+
+ // apply dynamic scaling
+ allocPct = allocPct * (dynamicRisk / baseRisk);
+
  if(activeTrades.length >= 3) allocPct *= 0.7;
  if(activeTrades.length >= 4) allocPct *= 0.5;
+
  return Math.max(1, Math.floor((capital * allocPct) / price));
 }
 
@@ -160,6 +163,14 @@ function getMetrics(){
  return {winRate:wr,avgWin:avgW,avgLoss:avgL,expectancy:exp};
 }
 
+function updateWealth(totalPnl){
+ if(totalPnl <= 0) return;
+ wealthStats.totalProfit = totalPnl;
+ wealthStats.taxReserve = totalPnl * wealthConfig.taxRate;
+ wealthStats.withdrawable = totalPnl * wealthConfig.withdrawRate;
+ wealthStats.reinvestable = totalPnl - wealthStats.taxReserve - wealthStats.withdrawable;
+}
+
 // STOCKS
 const STOCKS=["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK"];
 
@@ -169,6 +180,9 @@ setInterval(async()=>{
 
  try{
   await updateCapital();
+
+  // 🔥 UPDATE RISK BASED ON PERFORMANCE
+  updateRisk();
 
   const idxData = await kite.getLTP(["NSE:NIFTY 50"]);
   let idxPrice = idxData["NSE:NIFTY 50"]?.last_price;
@@ -218,7 +232,7 @@ setInterval(async()=>{
       signal="BUY";
     }
 
-    scanOutput.push({symbol:s,price,quality,signal});
+    scanOutput.push({symbol:s,price,quality,signal,risk:dynamicRisk});
 
     if(signal && !activeTrades.find(t=>t.symbol===s)){
 
@@ -274,7 +288,6 @@ setInterval(async()=>{
   activeTrades=remaining;
   pnl = closedTrades.reduce((a,b)=>a+b,0);
 
-  // 🔥 WEALTH UPDATE
   updateWealth(pnl);
 
  }catch(e){}
@@ -285,6 +298,7 @@ app.get("/performance",(req,res)=>{
  res.json({
   capital,
   pnl,
+  risk:dynamicRisk,
   performance:getMetrics(),
   wealth:wealthStats,
   activeTrades,
