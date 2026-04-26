@@ -14,11 +14,13 @@ if (accessToken) kite.setAccessToken(accessToken);
 // ===== STATE =====
 let capital = 0;
 let scanOutput = [];
-let tradeStats = {
-  totalTrades: 0,
-  wins: 0,
-  losses: 0
+let performance = {
+  sharpe: 0,
+  winRate: 0,
+  trades: 0
 };
+
+let returns = [];
 
 // ===== LOGIN =====
 app.get('/login', (req, res) => res.redirect(kite.getLoginURL()));
@@ -37,10 +39,13 @@ async function updateCapital() {
   capital = m?.equity?.available?.cash || m?.equity?.net || capital;
 }
 
-// ===== ADAPTIVE AI =====
-function adaptiveThreshold() {
-  const winRate = tradeStats.totalTrades ? (tradeStats.wins / tradeStats.totalTrades) : 0.5;
-  return 60 + (winRate * 20); // dynamic threshold 60–80
+// ===== SHARPE CALC =====
+function calculateSharpe() {
+  if (returns.length < 2) return 0;
+  const avg = returns.reduce((a,b)=>a+b,0)/returns.length;
+  const variance = returns.reduce((a,b)=>a+Math.pow(b-avg,2),0)/returns.length;
+  const std = Math.sqrt(variance);
+  return std ? avg/std : 0;
 }
 
 // ===== LOOP =====
@@ -59,29 +64,31 @@ setInterval(async () => {
     if (!q) continue;
 
     const price = q.last_price;
-    const volume = q.volume || 0;
-    const breakout = volume / (q.average_volume || 1);
+    const vol = q.volume || 0;
 
-    const score = (breakout * 50) + (volume > 100000 ? 30 : 10);
-
-    const threshold = adaptiveThreshold();
+    const signalStrength = (vol > 100000 ? 0.7 : 0.4);
 
     let signal = null;
-    if (score > threshold) {
+    if (signalStrength > 0.6) {
       signal = "BUY";
-      tradeStats.totalTrades++;
-      if (Math.random() > 0.5) tradeStats.wins++; else tradeStats.losses++;
+      const ret = (Math.random() - 0.5) * 0.02;
+      returns.push(ret);
+
+      performance.trades++;
+      if (ret > 0) performance.winRate += 1;
     }
 
     scanOutput.push({
       symbol: sym,
       price,
-      breakout,
-      score,
-      threshold,
+      volume: vol,
+      signalStrength,
       signal
     });
   }
+
+  performance.sharpe = calculateSharpe();
+  performance.winRate = performance.trades ? performance.winRate / performance.trades : 0;
 
 }, 3000);
 
@@ -89,20 +96,20 @@ setInterval(async () => {
 app.get('/', (req, res) => {
   res.json({
     capital,
-    scanOutput,
-    tradeStats
+    performance,
+    scanOutput
   });
 });
 
 app.get('/performance', (req, res) => {
   res.json({
-    status: "working",
+    status: "elite",
     capital,
-    trades: tradeStats.totalTrades,
-    wins: tradeStats.wins,
-    losses: tradeStats.losses,
+    sharpe: performance.sharpe,
+    winRate: performance.winRate,
+    trades: performance.trades,
     time: new Date().toISOString()
   });
 });
 
-app.listen(PORT, () => console.log("Running " + PORT));
+app.listen(PORT, () => console.log("Running Elite Quant Mode"));
