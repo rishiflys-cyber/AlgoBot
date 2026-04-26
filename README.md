@@ -1,12 +1,15 @@
-# Fix: /performance + capital debug
+# Fix: Proper Capital Extraction
 
-## What fixed
-- /performance route added
-- margin logs enabled
-- access token validation
+## What this does
+- Logs FULL margin response
+- Extracts capital from multiple possible fields
+- Supports equity + commodity
 
-## Step
+## Steps
 1. Replace server.js
-2. Redeploy
-3. Hit /login again
-4. Check / and /performance
+2. Redeploy Railway
+3. Login again
+4. Check logs → see FULL MARGINS
+
+## Expected
+Capital should now reflect actual available funds
