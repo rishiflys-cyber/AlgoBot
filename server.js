@@ -1,4 +1,4 @@
-// STEP 3: EXECUTION + RISK STABILIZATION (NO DOWNGRADE)
+// STEP 4: PORTFOLIO ALLOCATOR (NO DOWNGRADE)
 
 require("dotenv").config();
 const express = require("express");
@@ -17,7 +17,6 @@ let indexHistory=[];
 
 // LOGIN
 app.get("/login",(req,res)=> res.redirect(kite.getLoginURL()));
-
 app.get("/redirect", async (req,res)=>{
  try{
   const s=await kite.generateSession(req.query.request_token,process.env.KITE_API_SECRET);
@@ -63,16 +62,10 @@ function detectRegime(prices){
  return "NORMAL";
 }
 
-// 🔥 STEP 3 ADDITIONS
-
+// STEP 3 FUNCTIONS (kept)
 function riskGate(price, qty){
  let exposure = activeTrades.reduce((a,t)=>a+(t.entry*t.qty),0);
  return (exposure + price*qty) <= capital*0.6;
-}
-
-function positionSize(price, pr){
- let riskPct = pr >= 0.6 ? 0.03 : 0.02;
- return Math.max(1, Math.floor((capital * riskPct) / price));
 }
 
 function entryCheck(signal, price, hist){
@@ -80,6 +73,23 @@ function entryCheck(signal, price, hist){
  if(!prev) return true;
  if(signal==="BUY" && price < prev) return false;
  return true;
+}
+
+// 🔥 STEP 4 ADDITION — PORTFOLIO ALLOCATOR
+function portfolioAllocator(quality){
+ if(quality >= 80) return 0.05;   // high conviction
+ if(quality >= 70) return 0.035;  // medium
+ return 0.02;                     // low
+}
+
+function positionSize(price, quality){
+ let allocPct = portfolioAllocator(quality);
+
+ // reduce size if many active trades
+ if(activeTrades.length >= 3) allocPct *= 0.7;
+ if(activeTrades.length >= 4) allocPct *= 0.5;
+
+ return Math.max(1, Math.floor((capital * allocPct) / price));
 }
 
 // STOCKS
@@ -148,12 +158,11 @@ setInterval(async()=>{
       signal
     });
 
-    // 🔥 EXECUTION FILTERS APPLIED
     if(signal && !activeTrades.find(t=>t.symbol===s)){
 
       if(!entryCheck(signal, price, history[s])) continue;
 
-      let qty = positionSize(price, pr);
+      let qty = positionSize(price, quality);
 
       if(!riskGate(price, qty)) continue;
 
