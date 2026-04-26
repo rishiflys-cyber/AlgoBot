@@ -7,6 +7,8 @@ const KiteConnect = require("kiteconnect").KiteConnect;
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+const LIVE = process.env.LIVE_TRADING === "true";
+
 let kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
 let accessToken = process.env.ACCESS_TOKEN;
 
@@ -24,27 +26,15 @@ let state = {
 };
 
 let priceHistory = {};
+let lastPrice = {};
 
-// ===== GET PUBLIC IP =====
+// ===== FETCH IP =====
 async function fetchIP() {
   try {
     const res = await axios.get("https://api.ipify.org?format=json");
     state.serverIP = res.data.ip;
   } catch {}
 }
-
-// ===== LOGIN =====
-app.get('/login', (req, res) => res.redirect(kite.getLoginURL()));
-
-app.get('/redirect', async (req, res) => {
-  const session = await kite.generateSession(req.query.request_token, process.env.KITE_API_SECRET);
-  accessToken = session.access_token;
-  kite.setAccessToken(accessToken);
-
-  await fetchIP();
-
-  res.send(`Login success \nServer IP: ${state.serverIP}`);
-});
 
 // ===== CAPITAL =====
 async function updateCapital() {
@@ -54,48 +44,34 @@ async function updateCapital() {
   } catch {}
 }
 
-// ===== STRATEGIES =====
+// ===== INDICATORS =====
 function momentum(hist) {
   let up = 0;
   for (let i = 1; i < hist.length; i++) if (hist[i] > hist[i-1]) up++;
   return hist.length ? up / hist.length : 0.5;
 }
 
-function meanReversion(hist) {
-  const avg = hist.reduce((a,b)=>a+b,0)/hist.length;
-  const last = hist[hist.length-1];
-  return last < avg * 0.995 ? "BUY" : last > avg * 1.005 ? "SELL" : null;
+function volatility(hist) {
+  let sum = 0;
+  for (let i = 1; i < hist.length; i++) {
+    sum += Math.abs(hist[i] - hist[i-1]);
+  }
+  return hist.length ? sum / hist.length : 0;
 }
 
-function breakout(price, prev) {
-  if (!prev) return null;
-  if (price > prev * 1.002) return "BUY";
-  if (price < prev * 0.998) return "SELL";
-  return null;
-}
+// ===== SIGNAL SCORE =====
+function getScore(hist, price, prev, volumeSpike) {
+  if (hist.length < 10) return 0;
 
-// ===== SIGNAL COMBINER =====
-function getSignal(hist, price, prev) {
-  if (hist.length < 10) return null;
+  let score = 0;
 
-  let signals = [];
+  if (momentum(hist) > 0.6) score++;
+  if (momentum(hist) < 0.4) score++;
+  if (volatility(hist) > 0) score++;
+  if (volumeSpike) score++;
+  if (prev && price > prev) score++;
 
-  if (momentum(hist) > 0.6) signals.push("BUY");
-  if (momentum(hist) < 0.4) signals.push("SELL");
-
-  const mr = meanReversion(hist);
-  if (mr) signals.push(mr);
-
-  const br = breakout(price, prev);
-  if (br) signals.push(br);
-
-  const buy = signals.filter(s=>s==="BUY").length;
-  const sell = signals.filter(s=>s==="SELL").length;
-
-  if (buy >= 2) return "BUY";
-  if (sell >= 2) return "SELL";
-
-  return null;
+  return score;
 }
 
 // ===== RISK =====
@@ -105,8 +81,6 @@ function checkRisk() {
 }
 
 // ===== MAIN LOOP =====
-let lastPrice = {};
-
 setInterval(async () => {
   if (!accessToken || state.killSwitch) return;
 
@@ -115,43 +89,62 @@ setInterval(async () => {
   const symbols = ["NSE:RELIANCE","NSE:TCS","NSE:INFY"];
   const quotes = await kite.getQuote(symbols);
 
+  let candidates = [];
+
   for (const sym of symbols) {
     const q = quotes[sym];
     if (!q) continue;
 
     const price = q.last_price;
+    const volume = q.volume || 0;
+    const avgVol = q.average_volume || 1;
 
     if (!priceHistory[sym]) priceHistory[sym] = [];
     priceHistory[sym].push(price);
     if (priceHistory[sym].length > 20) priceHistory[sym].shift();
 
     const hist = priceHistory[sym];
-    const signal = getSignal(hist, price, lastPrice[sym]);
+    const volumeSpike = volume > avgVol * 1.2;
+
+    const score = getScore(hist, price, lastPrice[sym], volumeSpike);
 
     lastPrice[sym] = price;
 
-    if (signal && state.activeTrades.length < 3) {
-      const qty = Math.max(1, Math.floor((state.capital * 0.02) / price));
-
-      state.activeTrades.push({
-        symbol: sym,
-        entry: price,
-        side: signal,
-        qty,
-        sl: price * 0.995,
-        target: price * 1.01
-      });
-    }
+    candidates.push({ sym, price, score });
   }
+
+  // pick top trades only
+  candidates = candidates.sort((a,b)=>b.score-a.score).slice(0,2);
+
+  candidates.forEach(c => {
+    if (c.score < 3) return;
+    if (state.activeTrades.length >= 3) return;
+
+    const qty = Math.max(1, Math.floor((state.capital * 0.02) / c.price));
+
+    state.activeTrades.push({
+      symbol: c.sym,
+      entry: c.price,
+      qty,
+      sl: c.price * 0.995,
+      trail: c.price * 0.995,
+      target: c.price * 1.02
+    });
+  });
 
   // manage trades
   state.activeTrades = state.activeTrades.filter(tr => {
     const cp = lastPrice[tr.symbol];
+
+    // trailing SL
+    if (cp > tr.entry) {
+      tr.trail = Math.max(tr.trail, cp * 0.997);
+    }
+
     let exit = false;
 
-    if (tr.side === "BUY") {
-      if (cp >= tr.target || cp <= tr.sl) exit = true;
-    }
+    if (cp >= tr.target) exit = true;
+    if (cp <= tr.trail) exit = true;
 
     if (exit) {
       const pnl = (cp - tr.entry) * tr.qty;
@@ -183,4 +176,6 @@ app.get('/performance', (req, res) => {
   });
 });
 
-app.listen(PORT, () => console.log("FULL PRODUCTION SYSTEM RUNNING"));
+fetchIP();
+
+app.listen(PORT, () => console.log("PRO V3 RUNNING"));
