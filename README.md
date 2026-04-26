@@ -1,6 +1,8 @@
 
-Profit Optimization Layer
+Live Performance Dashboard
 
-- Adaptive risk based on win rate
-- Trade filtering (high-quality only)
-- Performance feedback loop
+Features:
+- Equity curve tracking
+- Trade history logging
+- Win rate, avg PnL metrics
+- Real-time analytics endpoint
