@@ -1,6 +1,6 @@
 
 {
-"name":"algobot-v12",
+"name":"algobot-v13",
 "version":"1.0.0",
 "main":"server.js",
 "scripts":{"start":"node server.js"},

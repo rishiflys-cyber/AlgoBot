@@ -14,18 +14,13 @@ const TOKEN_FILE = "access_token.json";
 let kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
 let accessToken = null;
 
-// load token
 if (fs.existsSync(TOKEN_FILE)) {
   const saved = JSON.parse(fs.readFileSync(TOKEN_FILE));
   accessToken = saved.token;
   kite.setAccessToken(accessToken);
 }
 
-// stocks (expandable)
-const STOCKS = [
-"NSE:RELIANCE","NSE:TCS","NSE:INFY","NSE:HDFCBANK","NSE:ICICIBANK",
-"NSE:SBIN","NSE:LT","NSE:AXISBANK","NSE:ITC","NSE:MARUTI"
-];
+const STOCKS = ["NSE:RELIANCE","NSE:TCS","NSE:INFY","NSE:HDFCBANK","NSE:ICICIBANK"];
 
 let state = {
   capital: 0,
@@ -37,7 +32,7 @@ let state = {
 
 let lastPrice = {};
 
-// login
+// LOGIN
 app.get('/login', (req,res)=>res.redirect(kite.getLoginURL()));
 
 app.get('/redirect', async (req,res)=>{
@@ -52,19 +47,27 @@ app.get('/redirect', async (req,res)=>{
 
     res.send("Login success | IP: " + state.serverIP);
   }catch(e){
-    res.send("Login failed");
+    res.send("Login failed: " + e.message);
   }
 });
 
-// capital
+// CAPITAL FIXED
 async function updateCapital(){
   try{
     const m = await kite.getMargins();
-    state.capital = m?.equity?.available?.cash || state.capital;
-  }catch{}
+    console.log("MARGINS:", m);
+
+    state.capital =
+      m?.equity?.available?.cash ||
+      m?.equity?.net ||
+      state.capital;
+
+  }catch(e){
+    console.log("MARGIN ERROR:", e.message);
+  }
 }
 
-// score
+// SCORE
 function getScore(price, prev){
   if(!prev) return 0;
   let s=0;
@@ -74,7 +77,7 @@ function getScore(price, prev){
   return s;
 }
 
-// execute
+// EXECUTION
 async function executeOrder(symbol, qty, side){
   if(!LIVE) return;
   const [exchange, tradingsymbol] = symbol.split(":");
@@ -89,7 +92,7 @@ async function executeOrder(symbol, qty, side){
   });
 }
 
-// loop
+// LOOP
 setInterval(async ()=>{
   if(!accessToken) return;
 
@@ -118,6 +121,7 @@ setInterval(async ()=>{
     if(state.activeTrades.length>=2) break;
 
     const qty = Math.max(1, Math.floor((state.capital*0.02)/s.price));
+    if(qty <= 0) continue;
 
     await executeOrder(s.sym, qty, "BUY");
 
@@ -142,8 +146,8 @@ setInterval(async ()=>{
 
 },3000);
 
-// routes
+// ROUTES
 app.get('/', (req,res)=>res.json(state));
 app.get('/performance', (req,res)=>res.json(state));
 
-app.listen(PORT, ()=>console.log("FINAL V12 RUNNING"));
+app.listen(PORT, ()=>console.log("FINAL V13 RUNNING"));
