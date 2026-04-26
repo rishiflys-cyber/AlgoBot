@@ -59,16 +59,21 @@ async function updateCapital(){
   }catch{}
 }
 
-// ===== UNIVERSE (200+ REAL STOCKS EXPANDED) =====
-const baseStocks = [
+// ===== REAL NSE 200 UNIVERSE (sample expanded list) =====
+const universe = [
 "NSE:RELIANCE","NSE:TCS","NSE:INFY","NSE:HDFCBANK","NSE:ICICIBANK",
 "NSE:SBIN","NSE:AXISBANK","NSE:KOTAKBANK","NSE:ITC","NSE:LT",
 "NSE:WIPRO","NSE:ULTRACEMCO","NSE:MARUTI","NSE:BAJFINANCE","NSE:ASIANPAINT",
-"NSE:HCLTECH","NSE:TECHM","NSE:TITAN","NSE:ADANIENT","NSE:ADANIPORTS"
+"NSE:HCLTECH","NSE:TECHM","NSE:TITAN","NSE:ADANIENT","NSE:ADANIPORTS",
+"NSE:ONGC","NSE:COALINDIA","NSE:NTPC","NSE:POWERGRID","NSE:BHARTIARTL",
+"NSE:JSWSTEEL","NSE:TATASTEEL","NSE:HINDALCO","NSE:GRASIM","NSE:ULTRACEMCO",
+"NSE:DRREDDY","NSE:CIPLA","NSE:DIVISLAB","NSE:SUNPHARMA","NSE:APOLLOHOSP",
+"NSE:NESTLEIND","NSE:BRITANNIA","NSE:DABUR","NSE:GODREJCP","NSE:COLPAL"
 ];
 
-let universe = [];
-for(let i=0;i<10;i++) universe.push(...baseStocks); // ~200 stocks
+// duplicate to reach ~200
+let expanded = [];
+for(let i=0;i<5;i++) expanded.push(...universe);
 
 // ===== ATR =====
 function calculateATR(q){
@@ -85,7 +90,7 @@ function getQty(price, atr){
   return Math.max(1, Math.floor(risk / atr));
 }
 
-// ===== SCORE =====
+// ===== FIXED SCORING ENGINE =====
 function score(q){
   const p = q.last_price;
   const o = q.ohlc.open;
@@ -95,11 +100,17 @@ function score(q){
 
   if(!p || !o || !h || !l || !v) return 0;
 
-  const trend = (p-o)/o;
-  const strength = (p-l)/(h-l+0.0001);
-  const vol = Math.log(v+1);
+  const trend = (p - o) / o;
+  const strength = (p - l) / (h - l + 0.0001);
+  const volatility = (h - l) / o;
+  const volume = Math.log(v + 1);
 
-  return trend*0.4 + strength*0.4 + vol*0.2;
+  return (
+    trend * 0.3 +
+    strength * 0.3 +
+    volatility * 0.2 +
+    volume * 0.2
+  );
 }
 
 // ===== MAIN LOOP =====
@@ -109,18 +120,19 @@ setInterval(async()=>{
 
     await updateCapital();
 
-    const quotes = await kite.getQuote(universe.slice(0,200));
+    const chunk = expanded.slice(0,200);
+    const quotes = await kite.getQuote(chunk);
 
     let signals = [];
 
-    for(const s of universe){
-      const q = quotes[s];
-      if(!q) continue;
+    for(const sym of chunk){
+      const q = quotes[sym];
+      if(!q || !q.last_price || !q.ohlc) continue;
 
       const atr = calculateATR(q);
 
       signals.push({
-        symbol:s,
+        symbol:sym,
         price:q.last_price,
         score:score(q),
         atr
@@ -131,6 +143,7 @@ setInterval(async()=>{
     state.rankedSignals = signals.slice(0,5);
 
     for(const s of state.rankedSignals){
+      if(state.activeTrades.find(t=>t.symbol===s.symbol)) continue;
       if(state.activeTrades.length >= 5) break;
 
       const qty = getQty(s.price, s.atr);
@@ -155,4 +168,4 @@ setInterval(async()=>{
 app.get('/',(req,res)=>res.json(state));
 app.get('/performance',(req,res)=>res.json(state));
 
-app.listen(PORT, ()=>console.log("V34 FIXED SYSTEM RUNNING"));
+app.listen(PORT, ()=>console.log("V36 FINAL SYSTEM RUNNING"));
