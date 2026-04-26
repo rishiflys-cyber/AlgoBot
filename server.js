@@ -1,4 +1,4 @@
-// STEP 5: DYNAMIC SL/TP (VOLATILITY-BASED) — NO DOWNGRADE
+// STEP 6: TRADE COOLDOWN SYSTEM (NO DOWNGRADE)
 
 require("dotenv").config();
 const express = require("express");
@@ -14,6 +14,7 @@ let capital=0, pnl=0;
 let activeTrades=[], closedTrades=[];
 let history={}, volumeHistory={}, scanOutput=[];
 let indexHistory=[];
+let lossTracker={}; // 🔥 NEW
 
 // LOGIN
 app.get("/login",(req,res)=> res.redirect(kite.getLoginURL()));
@@ -62,7 +63,7 @@ function detectRegime(prices){
  return "NORMAL";
 }
 
-// STEP 3/4 FUNCTIONS (kept)
+// EXISTING
 function riskGate(price, qty){
  let exposure = activeTrades.reduce((a,t)=>a+(t.entry*t.qty),0);
  return (exposure + price*qty) <= capital*0.6;
@@ -88,7 +89,6 @@ function positionSize(price, quality){
  return Math.max(1, Math.floor((capital * allocPct) / price));
 }
 
-// 🔥 STEP 5 ADDITIONS — VOLATILITY + DYNAMIC SL/TP
 function calcVol(prices){
  if(prices.length < 2) return 0;
  let diffs = [];
@@ -100,9 +100,31 @@ function calcVol(prices){
 
 function getSLTP(entry, prices){
  let vol = calcVol(prices);
- let sl = Math.max(0.002, (vol / entry) * 1.5); // floor + volatility
- let tp = sl * 1.5; // RR 1.5
+ let sl = Math.max(0.002, (vol / entry) * 1.5);
+ let tp = sl * 1.5;
  return { sl, tp };
+}
+
+// 🔥 STEP 6 ADDITION — COOLDOWN SYSTEM
+function checkCooldown(symbol){
+ let data = lossTracker[symbol];
+ if(!data) return false;
+
+ if(data.lossCount < 2) return false;
+
+ let minutesPassed = (Date.now() - data.lastLossTime) / 60000;
+ return minutesPassed < 10; // 10 min cooldown
+}
+
+function updateLoss(symbol, profit){
+ if(!lossTracker[symbol]) lossTracker[symbol]={lossCount:0,lastLossTime:0};
+
+ if(profit < 0){
+  lossTracker[symbol].lossCount++;
+  lossTracker[symbol].lastLossTime = Date.now();
+ } else {
+  lossTracker[symbol] = {lossCount:0,lastLossTime:0};
+ }
 }
 
 // STOCKS
@@ -128,6 +150,9 @@ setInterval(async()=>{
   scanOutput=[];
 
   for(let s of STOCKS){
+
+    // 🔥 COOLDOWN CHECK
+    if(checkCooldown(s)) continue;
 
     let d=quotes["NSE:"+s];
     if(!d) continue;
@@ -168,7 +193,8 @@ setInterval(async()=>{
       regime,
       agreement,
       quality,
-      signal
+      signal,
+      cooldown: checkCooldown(s)
     });
 
     if(signal && !activeTrades.find(t=>t.symbol===s)){
@@ -200,7 +226,7 @@ setInterval(async()=>{
     }
   }
 
-  // 🔥 EXIT ENGINE (NEW)
+  // EXIT + LOSS TRACK
   let remaining=[];
   for(let t of activeTrades){
     let cp = quotes["NSE:"+t.symbol]?.last_price;
@@ -218,7 +244,11 @@ setInterval(async()=>{
         order_type:"MARKET"
       });
 
-      closedTrades.push(profit * t.qty);
+      let pnlTrade = profit * t.qty;
+      closedTrades.push(pnlTrade);
+
+      updateLoss(t.symbol, pnlTrade);
+
     } else {
       remaining.push(t);
     }
