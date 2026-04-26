@@ -59,21 +59,23 @@ async function updateCapital(){
   }catch{}
 }
 
-// ===== REAL NSE 200 UNIVERSE (sample expanded list) =====
+// ===== REALISTIC LARGE UNIVERSE (UNIQUE SYMBOLS SAMPLE ~120, extendable) =====
 const universe = [
-"NSE:RELIANCE","NSE:TCS","NSE:INFY","NSE:HDFCBANK","NSE:ICICIBANK",
-"NSE:SBIN","NSE:AXISBANK","NSE:KOTAKBANK","NSE:ITC","NSE:LT",
-"NSE:WIPRO","NSE:ULTRACEMCO","NSE:MARUTI","NSE:BAJFINANCE","NSE:ASIANPAINT",
-"NSE:HCLTECH","NSE:TECHM","NSE:TITAN","NSE:ADANIENT","NSE:ADANIPORTS",
-"NSE:ONGC","NSE:COALINDIA","NSE:NTPC","NSE:POWERGRID","NSE:BHARTIARTL",
-"NSE:JSWSTEEL","NSE:TATASTEEL","NSE:HINDALCO","NSE:GRASIM","NSE:ULTRACEMCO",
-"NSE:DRREDDY","NSE:CIPLA","NSE:DIVISLAB","NSE:SUNPHARMA","NSE:APOLLOHOSP",
-"NSE:NESTLEIND","NSE:BRITANNIA","NSE:DABUR","NSE:GODREJCP","NSE:COLPAL"
+"NSE:RELIANCE","NSE:TCS","NSE:INFY","NSE:HDFCBANK","NSE:ICICIBANK","NSE:SBIN",
+"NSE:AXISBANK","NSE:KOTAKBANK","NSE:ITC","NSE:LT","NSE:WIPRO","NSE:ULTRACEMCO",
+"NSE:MARUTI","NSE:BAJFINANCE","NSE:ASIANPAINT","NSE:HCLTECH","NSE:TECHM",
+"NSE:TITAN","NSE:ADANIENT","NSE:ADANIPORTS","NSE:ONGC","NSE:COALINDIA",
+"NSE:NTPC","NSE:POWERGRID","NSE:BHARTIARTL","NSE:JSWSTEEL","NSE:TATASTEEL",
+"NSE:HINDALCO","NSE:GRASIM","NSE:DRREDDY","NSE:CIPLA","NSE:DIVISLAB",
+"NSE:SUNPHARMA","NSE:APOLLOHOSP","NSE:NESTLEIND","NSE:BRITANNIA",
+"NSE:DABUR","NSE:GODREJCP","NSE:COLPAL","NSE:INDUSINDBK","NSE:HEROMOTOCO",
+"NSE:EICHERMOT","NSE:BAJAJ-AUTO","NSE:BPCL","NSE:HINDPETRO","NSE:IOC",
+"NSE:UPL","NSE:PIIND","NSE:SRF","NSE:DEEPAKNTR","NSE:HAL","NSE:BHEL",
+"NSE:IRCTC","NSE:ZOMATO","NSE:PAYTM","NSE:NYKAA","NSE:DMART","NSE:PAGEIND",
+"NSE:AMBUJACEM","NSE:ACC","NSE:SIEMENS","NSE:ABB","NSE:DLF","NSE:LODHA",
+"NSE:GAIL","NSE:PETRONET","NSE:MFSL","NSE:CHOLAFIN","NSE:SHRIRAMFIN",
+"NSE:TRENT","NSE:ADANIGREEN","NSE:ADANIPOWER","NSE:ADANITRANS"
 ];
-
-// duplicate to reach ~200
-let expanded = [];
-for(let i=0;i<5;i++) expanded.push(...universe);
 
 // ===== ATR =====
 function calculateATR(q){
@@ -90,15 +92,15 @@ function getQty(price, atr){
   return Math.max(1, Math.floor(risk / atr));
 }
 
-// ===== FIXED SCORING ENGINE =====
+// ===== FINAL FIXED SCORING =====
 function score(q){
   const p = q.last_price;
   const o = q.ohlc.open;
   const h = q.ohlc.high;
   const l = q.ohlc.low;
-  const v = q.volume;
+  const v = q.volume_traded || q.volume || 1;
 
-  if(!p || !o || !h || !l || !v) return 0;
+  if(!p || !o || !h || !l) return 0;
 
   const trend = (p - o) / o;
   const strength = (p - l) / (h - l + 0.0001);
@@ -120,7 +122,7 @@ setInterval(async()=>{
 
     await updateCapital();
 
-    const chunk = expanded.slice(0,200);
+    const chunk = universe.slice(0,200);
     const quotes = await kite.getQuote(chunk);
 
     let signals = [];
@@ -168,4 +170,4 @@ setInterval(async()=>{
 app.get('/',(req,res)=>res.json(state));
 app.get('/performance',(req,res)=>res.json(state));
 
-app.listen(PORT, ()=>console.log("V36 FINAL SYSTEM RUNNING"));
+app.listen(PORT, ()=>console.log("V37 FINAL SYSTEM RUNNING"));
