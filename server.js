@@ -23,46 +23,53 @@ let state = {
   alert: false
 };
 
-// ===== LOGIN =====
-app.get('/login', (req, res) => res.redirect(kite.getLoginURL()));
-
-app.get('/redirect', async (req, res) => {
-  const session = await kite.generateSession(req.query.request_token, process.env.KITE_API_SECRET);
-  accessToken = session.access_token;
-  kite.setAccessToken(accessToken);
-  res.send("Login success");
-});
+let priceHistory = {};
 
 // ===== CAPITAL =====
 async function updateCapital() {
-  if (!accessToken) return;
   try {
     const m = await kite.getMargins();
     state.capital = m?.equity?.available?.cash || m?.equity?.net || state.capital;
   } catch {}
 }
 
-// ===== SIMPLE SIGNAL =====
-function getSignal(price, prev) {
-  if (!prev) return null;
-  if (price > prev) return "BUY";
-  if (price < prev) return "SELL";
+// ===== INDICATORS =====
+function momentum(hist) {
+  let up = 0;
+  for (let i = 1; i < hist.length; i++) {
+    if (hist[i] > hist[i-1]) up++;
+  }
+  return hist.length ? up / hist.length : 0.5;
+}
+
+function volatility(hist) {
+  let sum = 0;
+  for (let i = 1; i < hist.length; i++) {
+    sum += Math.abs(hist[i] - hist[i-1]);
+  }
+  return hist.length ? sum / hist.length : 0;
+}
+
+// ===== SIGNAL ENGINE =====
+function getSignal(hist, volumeSpike) {
+  if (hist.length < 10) return null;
+
+  const m = momentum(hist);
+  const v = volatility(hist);
+
+  if (m > 0.65 && volumeSpike && v > 0) return "BUY";
+  if (m < 0.35 && volumeSpike && v > 0) return "SELL";
+
   return null;
 }
 
-// ===== KILL SWITCH =====
+// ===== RISK =====
 function checkRisk() {
-  if (state.pnl < -0.05 * state.capital) {
-    state.killSwitch = true;
-  }
-  if (state.pnl < -0.03 * state.capital) {
-    state.alert = true;
-  }
+  if (state.pnl < -0.05 * state.capital) state.killSwitch = true;
+  if (state.pnl < -0.03 * state.capital) state.alert = true;
 }
 
 // ===== MAIN LOOP =====
-let lastPrice = {};
-
 setInterval(async () => {
   if (!accessToken || state.killSwitch) return;
 
@@ -76,9 +83,17 @@ setInterval(async () => {
     if (!q) continue;
 
     const price = q.last_price;
-    const signal = getSignal(price, lastPrice[sym]);
+    const volume = q.volume || 0;
+    const avgVol = q.average_volume || 1;
 
-    lastPrice[sym] = price;
+    if (!priceHistory[sym]) priceHistory[sym] = [];
+    priceHistory[sym].push(price);
+    if (priceHistory[sym].length > 20) priceHistory[sym].shift();
+
+    const hist = priceHistory[sym];
+    const volumeSpike = volume > avgVol * 1.2;
+
+    const signal = getSignal(hist, volumeSpike);
 
     if (signal && state.activeTrades.length < 3) {
       const qty = Math.max(1, Math.floor((state.capital * 0.01) / price));
@@ -87,21 +102,29 @@ setInterval(async () => {
         symbol: sym,
         entry: price,
         side: signal,
-        qty
+        qty,
+        sl: price * 0.995,
+        target: price * 1.01
       });
     }
   }
 
-  // manage exits
+  // manage trades
   state.activeTrades = state.activeTrades.filter(tr => {
-    const cp = lastPrice[tr.symbol];
-    const pnl = (cp - tr.entry) * tr.qty;
+    const cp = priceHistory[tr.symbol].slice(-1)[0];
+    let exit = false;
 
-    if (Math.abs(pnl) > tr.entry * 0.01) {
+    if (tr.side === "BUY") {
+      if (cp >= tr.target || cp <= tr.sl) exit = true;
+    }
+
+    if (exit) {
+      const pnl = (cp - tr.entry) * tr.qty;
       state.pnl += pnl;
       state.closedTrades.push({ ...tr, exit: cp, pnl });
       return false;
     }
+
     return true;
   });
 
@@ -110,9 +133,7 @@ setInterval(async () => {
 }, 3000);
 
 // ===== ROUTES =====
-app.get('/', (req, res) => {
-  res.json(state);
-});
+app.get('/', (req, res) => res.json(state));
 
 app.get('/performance', (req, res) => {
   res.json({
@@ -126,4 +147,4 @@ app.get('/performance', (req, res) => {
   });
 });
 
-app.listen(PORT, () => console.log("FINAL SYSTEM RUNNING"));
+app.listen(PORT, () => console.log("UPGRADED SYSTEM RUNNING"));
