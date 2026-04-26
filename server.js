@@ -1,4 +1,4 @@
-// STEP 10: DRAWDOWN KILL SWITCH (NO DOWNGRADE)
+// STEP 11: VaR RISK ENGINE (NO DOWNGRADE)
 
 require("dotenv").config();
 const express = require("express");
@@ -23,18 +23,28 @@ let perfStats={totalTrades:0,wins:0,losses:0,totalWin:0,totalLoss:0};
 let wealthConfig={ taxRate:0.30, withdrawRate:0.20 };
 let wealthStats={ totalProfit:0, taxReserve:0, withdrawable:0, reinvestable:0 };
 
-// 🔥 STEP 10 — DRAWDOWN CONTROL
-let maxDrawdownPct = 0.10; // 10%
+// STEP 10
+let maxDrawdownPct = 0.10;
 let tradingHalted = false;
 
+// 🔥 STEP 11 — VaR ENGINE
+let VaRLimit = 0.05; // 5% of capital
+
+function calculateVaR(){
+ let totalExposure = activeTrades.reduce((a,t)=>a+(t.entry*t.qty),0);
+ return totalExposure / (capital || 1);
+}
+
+function checkVaR(){
+ let varValue = calculateVaR();
+ return varValue < VaRLimit;
+}
+
+// DRAW DOWN
 function checkDrawdown(){
  if(pnl > peakPnL) peakPnL = pnl;
-
  let dd = (peakPnL - pnl) / (peakPnL || 1);
-
- if(dd >= maxDrawdownPct){
-   tradingHalted = true;
- }
+ if(dd >= maxDrawdownPct) tradingHalted = true;
 }
 
 // CAPITAL SCALING
@@ -189,8 +199,8 @@ setInterval(async()=>{
 
   for(let s of STOCKS){
 
-    if(tradingHalted) break; // 🔥 kill switch
-
+    if(tradingHalted) break;
+    if(!checkVaR()) break; // 🔥 VaR control
     if(checkCooldown(s)) continue;
 
     let d=quotes["NSE:"+s];
@@ -218,10 +228,9 @@ setInterval(async()=>{
       signal="BUY";
     }
 
-    scanOutput.push({symbol:s,price,quality,signal,halted:tradingHalted});
+    scanOutput.push({symbol:s,price,quality,signal,VaR:calculateVaR()});
 
     if(signal && !activeTrades.find(t=>t.symbol===s)){
-
       if(!entryCheck(signal,price,history[s])) continue;
 
       let qty=positionSize(price,quality);
@@ -268,7 +277,7 @@ setInterval(async()=>{
   pnl=closedTrades.reduce((a,b)=>a+b,0);
 
   updateWealth(pnl);
-  checkDrawdown(); // 🔥 apply drawdown logic
+  checkDrawdown();
 
  }catch(e){}
 },3000);
@@ -278,6 +287,7 @@ app.get("/performance",(req,res)=>{
  res.json({
   capital,
   pnl,
+  VaR: calculateVaR(),
   halted:tradingHalted,
   performance:getMetrics(),
   wealth:wealthStats,
