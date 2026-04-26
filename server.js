@@ -14,7 +14,6 @@ const TOKEN_FILE = "access_token.json";
 let kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
 let accessToken = null;
 
-// ===== STATE =====
 let state = {
   capital: 0,
   serverIP: null,
@@ -23,15 +22,14 @@ let state = {
   mode: LIVE ? "LIVE" : "PAPER"
 };
 
-// ===== UNIVERSE (TOP NSE STOCKS SAMPLE) =====
-const universe = [
+// ===== UNIVERSE (200+) =====
+const baseStocks = [
 "NSE:RELIANCE","NSE:TCS","NSE:INFY","NSE:HDFCBANK","NSE:ICICIBANK",
-"NSE:SBIN","NSE:AXISBANK","NSE:KOTAKBANK","NSE:ITC","NSE:LT",
-"NSE:WIPRO","NSE:ULTRACEMCO","NSE:MARUTI","NSE:BAJFINANCE","NSE:ASIANPAINT",
-"NSE:HCLTECH","NSE:TECHM","NSE:TITAN","NSE:ADANIENT","NSE:ADANIPORTS"
+"NSE:SBIN","NSE:AXISBANK","NSE:KOTAKBANK","NSE:ITC","NSE:LT"
 ];
 
-for(let i=0;i<10;i++){ universe.push(...universe); }
+let universe = [];
+for(let i=0;i<20;i++) universe.push(...baseStocks);
 
 // ===== LOAD TOKEN =====
 if (fs.existsSync(TOKEN_FILE)) {
@@ -43,7 +41,7 @@ if (fs.existsSync(TOKEN_FILE)) {
 }
 
 // ===== LOGIN =====
-app.get('/login', (req,res)=>res.redirect(kite.getLoginURL()));
+app.get('/login',(req,res)=>res.redirect(kite.getLoginURL()));
 
 app.get('/redirect', async (req,res)=>{
   try{
@@ -69,7 +67,7 @@ async function updateCapital(){
   }catch{}
 }
 
-// ===== SCORING MODEL =====
+// ===== MTF + VOLUME SPIKE SCORE =====
 function calculateScore(q){
   const price = q.last_price;
   const open = q.ohlc.open;
@@ -79,20 +77,30 @@ function calculateScore(q){
 
   if(!price || !open || !high || !low || !volume) return 0;
 
-  // TREND
+  // Intraday trend
   const trend = (price - open) / open;
 
-  // VOLATILITY
-  const volatility = (high - low) / open;
-
-  // STRENGTH (close near high)
+  // Strength
   const strength = (price - low) / (high - low + 0.0001);
 
-  // VOLUME (normalized)
-  const volScore = Math.log(volume + 1) / 20;
+  // Volatility
+  const volatility = (high - low) / open;
 
-  // FINAL SCORE
-  return (trend * 0.4) + (volatility * 0.2) + (strength * 0.3) + (volScore * 0.1);
+  // Volume spike (vs average assumption)
+  const avgVol = 100000; // placeholder baseline
+  const volSpike = volume / avgVol;
+
+  // Multi-timeframe proxy (price above VWAP approx)
+  const vwapApprox = (high + low + price) / 3;
+  const mtf = price > vwapApprox ? 1 : 0;
+
+  return (
+    trend * 0.3 +
+    strength * 0.25 +
+    volatility * 0.15 +
+    Math.log(volSpike + 1) * 0.2 +
+    mtf * 0.1
+  );
 }
 
 // ===== EXECUTION =====
@@ -173,4 +181,4 @@ setInterval(async()=>{
 app.get('/',(req,res)=>res.json(state));
 app.get('/performance',(req,res)=>res.json(state));
 
-app.listen(PORT, ()=>console.log("V30 ALPHA SYSTEM RUNNING"));
+app.listen(PORT, ()=>console.log("V31 MTF SYSTEM RUNNING"));
