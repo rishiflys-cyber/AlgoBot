@@ -17,38 +17,97 @@ let closedTrades=[];
 let history={}, volumeHistory={}, scanOutput=[];
 let serverIP="UNKNOWN";
 
-// ================= WEALTH LAYER (NEW) =================
-let taxConfig = {
-  taxRate: 0.30,          // intraday approx
-  withdrawPercent: 0.20   // withdraw 20% of profit
+// ================= WEALTH =================
+let taxConfig={ taxRate:0.30, withdrawPercent:0.20 };
+
+let wealthStats={
+ totalProfit:0,
+ taxReserve:0,
+ withdrawable:0,
+ reinvestable:0
 };
 
-let wealthStats = {
-  totalProfit: 0,
-  taxReserve: 0,
-  withdrawable: 0,
-  reinvestable: 0
-};
-
-function updateWealth(pnlValue){
-  if(pnlValue <= 0) return;
-
-  wealthStats.totalProfit = pnlValue;
-
-  wealthStats.taxReserve = pnlValue * taxConfig.taxRate;
-  wealthStats.withdrawable = pnlValue * taxConfig.withdrawPercent;
-  wealthStats.reinvestable = pnlValue - wealthStats.taxReserve - wealthStats.withdrawable;
+function updateWealth(p){
+ if(p<=0) return;
+ wealthStats.totalProfit=p;
+ wealthStats.taxReserve=p*taxConfig.taxRate;
+ wealthStats.withdrawable=p*taxConfig.withdrawPercent;
+ wealthStats.reinvestable=p-wealthStats.taxReserve-wealthStats.withdrawable;
 }
 
-// ================= SAFETY =================
-process.on("uncaughtException", e=>console.error("UNCAUGHT:",e));
-process.on("unhandledRejection", e=>console.error("UNHANDLED:",e));
+// ================= PERFORMANCE =================
+let perfStats={wins:0,losses:0,total:0,totalWin:0,totalLoss:0};
+
+function updatePerf(p){
+ perfStats.total++;
+ if(p>0){ perfStats.wins++; perfStats.totalWin+=p; }
+ else{ perfStats.losses++; perfStats.totalLoss+=p; }
+}
+
+function expectancy(){
+ if(perfStats.total===0) return 0;
+ let wr=perfStats.wins/perfStats.total;
+ let lr=perfStats.losses/perfStats.total;
+ let avgW=perfStats.totalWin/(perfStats.wins||1);
+ let avgL=Math.abs(perfStats.totalLoss/(perfStats.losses||1));
+ return (wr*avgW)-(lr*avgL);
+}
+
+// ================= COOLDOWN =================
+let lossTracker={};
+
+function checkCooldown(symbol){
+ let data=lossTracker[symbol];
+ if(!data) return false;
+ if(data.count<2) return false;
+ let diff=(Date.now()-data.time)/60000;
+ return diff<10;
+}
+
+function updateLoss(symbol, profit){
+ if(!lossTracker[symbol]) lossTracker[symbol]={count:0,time:0};
+ if(profit<0){
+   lossTracker[symbol].count++;
+   lossTracker[symbol].time=Date.now();
+ } else {
+   lossTracker[symbol]={count:0,time:0};
+ }
+}
+
+// ================= TIME FILTER =================
+function canTradeNow(){
+ let now=new Date();
+ let ist=new Date(now.toLocaleString("en-US",{timeZone:"Asia/Kolkata"}));
+ let h=ist.getHours(), m=ist.getMinutes();
+ let mins=h*60+m;
+ return mins>=560 && mins<=885; // 9:20–14:45
+}
+
+// ================= REGIME =================
+function detectRegime(prices){
+ if(prices.length<5) return "NORMAL";
+ let max=Math.max(...prices), min=Math.min(...prices);
+ let range=(max-min)/min;
+ if(range<0.002) return "SIDEWAYS";
+ if(range>0.01) return "VOLATILE";
+ return "NORMAL";
+}
+
+// ================= VOLATILITY =================
+function calcVol(prices){
+ if(prices.length<2) return 0;
+ let arr=[];
+ for(let i=1;i<prices.length;i++){
+   arr.push(Math.abs(prices[i]-prices[i-1]));
+ }
+ return arr.reduce((a,b)=>a+b,0)/arr.length;
+}
 
 // ================= HELPERS =================
 async function updateIP(){
  try{
-  let res = await axios.get("https://api.ipify.org?format=json");
-  serverIP = res.data.ip;
+  let res=await axios.get("https://api.ipify.org?format=json");
+  serverIP=res.data.ip;
  }catch(e){}
 }
 
@@ -80,119 +139,78 @@ function getIndexTrend(){
 // ================= VOLUME =================
 function volumeBreakout(symbol, vol){
  if(!volumeHistory[symbol]) return false;
- let avg = volumeHistory[symbol].reduce((a,b)=>a+b,0)/volumeHistory[symbol].length;
- return vol > avg * 1.5;
+ let avg=volumeHistory[symbol].reduce((a,b)=>a+b,0)/volumeHistory[symbol].length;
+ return vol>avg*1.5;
 }
 
-// ================= ADVANCED ENGINE =================
+// ================= QUALITY =================
 function tradeQualityScore(pr, volBreak, agreement){
  return Math.min(100,(pr*40)+(volBreak?30:10)+(agreement*10));
 }
 
-let autoConfig={minQuality:65,minProb:0.5};
-
-function passesAutoFilter(q,pr){
- return q>=autoConfig.minQuality && pr>=autoConfig.minProb;
-}
-
 function entryCheck(signal, price, history, s){
- let prev = history[s]?.[history[s].length-2];
- if(signal==="BUY" && prev && price<prev) return false;
- if(signal==="SELL" && prev && price>prev) return false;
+ let prev=history[s]?.[history[s].length-2];
+ if(signal==="BUY"&&prev&&price<prev) return false;
+ if(signal==="SELL"&&prev&&price>prev) return false;
  return true;
 }
 
 function riskGate(symbol, price, qty){
- let exposure = activeTrades.reduce((a,t)=>a+(t.entry*t.qty),0);
- return (exposure + price*qty) <= capital*0.6;
+ let exp=activeTrades.reduce((a,t)=>a+(t.entry*t.qty),0);
+ return (exp+price*qty)<=capital*0.6;
 }
 
-function finalQty(price, riskPct){
+function finalQty(price, risk){
  if(!capital) return 1;
- return Math.max(1,Math.floor((capital*riskPct)/price));
-}
-
-async function smartOrderRoute(params){
- await kite.placeOrder("regular",params);
+ return Math.max(1,Math.floor((capital*risk)/price));
 }
 
 // ================= EXECUTION =================
-function shouldEnterTrade({agreement, pr, quality, signal, symbol, price}){
- if(!signal) return false;
- if(!passesAutoFilter(quality, pr)) return false;
- if(!entryCheck(signal, price, history, symbol)) return false;
-
- let qty = finalQty(price, pr>=0.6?0.05:0.02);
- if(!riskGate(symbol, price, qty)) return false;
-
- return {signal, qty};
+async function smartOrderRoute(p){
+ await kite.placeOrder("regular",p);
 }
 
-async function placeTrade(symbol, signal, qty, price){
+async function placeTrade(s, signal, qty, price){
  await smartOrderRoute({
-  exchange:"NSE",
-  tradingsymbol:symbol,
-  transaction_type:signal,
-  quantity:qty,
-  product:"MIS",
-  order_type:"MARKET"
+  exchange:"NSE", tradingsymbol:s,
+  transaction_type:signal, quantity:qty,
+  product:"MIS", order_type:"MARKET"
  });
-
- activeTrades.push({symbol, entry:price, type:signal, qty});
+ activeTrades.push({symbol:s,entry:price,type:signal,qty});
 }
 
 // ================= STOCKS =================
 const STOCKS=["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","ITC","LT","AXISBANK","KOTAKBANK"];
 
-// ================= DASHBOARD =================
-app.get("/",(req,res)=>{
- res.send(`<h2>FINAL ENGINE + WEALTH LAYER</h2><pre id="d"></pre>
- <script>
- setInterval(async()=>{
-  let r=await fetch('/performance');
-  let d=await r.json();
-  document.getElementById('d').innerText=JSON.stringify(d,null,2);
- },2000);
- </script>`);
-});
-
-app.get("/login",(req,res)=>res.redirect(kite.getLoginURL()));
-
-app.get("/redirect",async(req,res)=>{
- try{
-  const s=await kite.generateSession(req.query.request_token,process.env.KITE_API_SECRET);
-  access_token=s.access_token;
-  kite.setAccessToken(access_token);
-  BOT_ACTIVE=true;
-  await updateIP();
-  res.send("Login Success IP:"+serverIP);
- }catch(e){res.send("Login failed");}
-});
-
-// ================= MAIN LOOP =================
+// ================= LOOP =================
 setInterval(async()=>{
- if(!access_token||!BOT_ACTIVE) return;
+ if(!access_token||!BOT_ACTIVE||!canTradeNow()) return;
 
  try{
   await updateCapital();
 
-  let indexData=await kite.getLTP(["NSE:NIFTY 50"]);
-  let idx=indexData["NSE:NIFTY 50"]?.last_price;
-  if(idx){
-    indexHistory.push(idx);
+  let idx=await kite.getLTP(["NSE:NIFTY 50"]);
+  let priceIdx=idx["NSE:NIFTY 50"]?.last_price;
+  if(priceIdx){
+    indexHistory.push(priceIdx);
     if(indexHistory.length>6) indexHistory.shift();
   }
 
   let indexTrend=getIndexTrend();
-  const quotes=await kite.getQuote(STOCKS.map(s=>"NSE:"+s));
+  let regime=detectRegime(indexHistory);
+
+  let quotes=await kite.getQuote(STOCKS.map(s=>"NSE:"+s));
   scanOutput=[];
 
   for(let s of STOCKS){
-    let data=quotes["NSE:"+s];
-    if(!data) continue;
 
-    let price=data.last_price;
-    let vol=data.volume;
+    if(checkCooldown(s)) continue;
+
+    let d=quotes["NSE:"+s];
+    if(!d) continue;
+
+    let price=d.last_price;
+    let vol=d.volume;
 
     if(!history[s]) history[s]=[];
     history[s].push(price);
@@ -203,90 +221,89 @@ setInterval(async()=>{
     if(volumeHistory[s].length>6) volumeHistory[s].shift();
 
     let pr=prob(history[s]);
-    let volBreak=volumeBreakout(s, vol);
+    let volBreak=volumeBreakout(s,vol);
 
     let momentum=pr>=0.5;
     let indexAlign=indexTrend==="UP"||indexTrend==="DOWN";
 
-    let agreement = [momentum, volBreak, indexAlign].filter(x => x).length;
+    let agreement=[momentum,volBreak,indexAlign].filter(x=>x).length;
 
-    let quality = tradeQualityScore(pr, volBreak, agreement);
+    let quality=tradeQualityScore(pr,volBreak,agreement);
 
-    let signal = null;
+    let signal=null;
 
-    if (
-      agreement >= 2 &&
-      pr >= 0.5 &&
-      quality >= 65
+    if(
+      regime!=="SIDEWAYS" &&
+      agreement>=2 &&
+      pr>=(regime==="VOLATILE"?0.6:0.5) &&
+      quality>=(regime==="VOLATILE"?70:65)
     ){
-      signal = indexTrend === "UP" ? "BUY" : "SELL";
+      signal=indexTrend==="UP"?"BUY":"SELL";
     }
 
-    scanOutput.push({
-      symbol:s,price,probability:pr,volume:vol,
-      volumeBreakout:volBreak,indexTrend,agreement,
-      tradeQualityScore:quality,signal
-    });
+    scanOutput.push({symbol:s,price,probability:pr,volume:vol,regime,quality,signal});
 
-    let result=shouldEnterTrade({
-      agreement,pr,quality,signal,
-      symbol:s,price
-    });
+    if(signal && !activeTrades.find(t=>t.symbol===s) && activeTrades.length<5){
+      if(!entryCheck(signal,price,history,s)) continue;
 
-    if(result && !activeTrades.find(t=>t.symbol===s) && activeTrades.length<5){
-      await placeTrade(s,result.signal,result.qty,price);
+      let qty=finalQty(price,pr>=0.6?0.05:0.02);
+      if(!riskGate(s,price,qty)) continue;
+
+      await placeTrade(s,signal,qty,price);
     }
   }
 
-  // EXIT LOGIC
-  let unreal=0, remaining=[];
+  // EXIT
+  let unreal=0, remain=[];
   for(let t of activeTrades){
     let cp=quotes["NSE:"+t.symbol]?.last_price;
     if(!cp) continue;
 
+    let vol=calcVol(history[t.symbol]||[]);
+    let sl=Math.max(0.002,(vol/t.entry)*1.5);
+    let tp=sl*1.5;
+
     let profit=t.type==="BUY"?(cp-t.entry):(t.entry-cp);
 
-    if(profit>t.entry*0.003 || profit<-t.entry*0.002){
+    if(profit>t.entry*tp || profit<-t.entry*sl){
       await smartOrderRoute({
-        exchange:"NSE",
-        tradingsymbol:t.symbol,
+        exchange:"NSE",tradingsymbol:t.symbol,
         transaction_type:t.type==="BUY"?"SELL":"BUY",
-        quantity:t.qty,
-        product:"MIS",
-        order_type:"MARKET"
+        quantity:t.qty,product:"MIS",order_type:"MARKET"
       });
 
-      closedTrades.push(profit*t.qty);
-    }else{
+      let p=profit*t.qty;
+      closedTrades.push(p);
+      updatePerf(p);
+      updateLoss(t.symbol,p);
+
+    } else {
       unreal+=profit*t.qty;
-      remaining.push(t);
+      remain.push(t);
     }
   }
 
-  activeTrades=remaining;
+  activeTrades=remain;
   let realized=closedTrades.reduce((a,b)=>a+b,0);
   pnl=realized+unreal;
 
-  // 🔥 UPDATE WEALTH LAYER
   updateWealth(pnl);
 
  }catch(e){}
 },3000);
 
-// ================= PERFORMANCE =================
+// ================= DASHBOARD =================
 app.get("/performance",(req,res)=>{
  res.json({
   botActive:BOT_ACTIVE,
   capital,
   pnl,
   serverIP,
-  activeTradesCount:activeTrades.length,
   scan:scanOutput,
   activeTrades,
   closedTrades,
-
-  // 🔥 NEW DASHBOARD FIELDS
-  wealth: wealthStats
+  wealth:wealthStats,
+  expectancy:expectancy()
  });
 });
 
