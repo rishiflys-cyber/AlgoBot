@@ -1,10 +1,10 @@
 
-REAL BACKTEST ENGINE
+STRATEGY REFINEMENT ENGINE
 
-Instructions:
-1. Add historical data as data.csv
-   Format: date,open,high,low,close,volume
-2. Run server
-3. View results at /
+Enhancements:
+- Moving average trend filter
+- Volume spike confirmation
+- Target + Stop-loss logic
+- Trade metrics (win rate, avg pnl)
 
-This replaces synthetic testing with real market data.
+Use with data.csv for real evaluation.
