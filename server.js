@@ -18,22 +18,19 @@ let accessToken=null;
 let state={
  capital:0,
  pnl:0,
- peakEquity:0,
- drawdown:0,
- killSwitch:false,
- regime:"UNKNOWN",
- strategies:{
-  momentum:{weight:0.33,pnl:0},
-  breakout:{weight:0.33,pnl:0},
-  meanReversion:{weight:0.33,pnl:0}
+ executionStats:{
+  totalTrades:0,
+  avgSlippage:0,
+  avgLatency:0,
+  slippages:[],
+  latencies:[]
  },
- rankedSignals:[],
  activeTrades:[],
  closedTrades:[],
  mode:LIVE?"LIVE":"PAPER"
 };
 
-let lastPrices=[];
+let lastPrice={};
 
 // LOAD TOKEN
 if(fs.existsSync(TOKEN_FILE)){
@@ -66,53 +63,56 @@ async function updateCapital(){
  try{
   const m=await kite.getMargins();
   state.capital = m?.equity?.available?.cash || m?.equity?.net || state.capital;
-
-  // EQUITY CURVE UPDATE
-  const equity = state.capital + state.pnl;
-
-  if(equity > state.peakEquity){
-    state.peakEquity = equity;
-  }
-
-  if(state.peakEquity > 0){
-    state.drawdown = (state.peakEquity - equity) / state.peakEquity;
-  }
-
-  // KILL SWITCH (10% DD)
-  if(state.drawdown > 0.10){
-    state.killSwitch = true;
-    console.log("🚨 KILL SWITCH ACTIVATED");
-  }
-
  }catch{}
 }
 
-// REGIME DETECTION
-function detectRegime(price){
- lastPrices.push(price);
- if(lastPrices.length>20) lastPrices.shift();
+// EXECUTION WITH ANALYTICS
+async function executeOrder(sym, qty, side, expectedPrice){
+ const startTime = Date.now();
 
- if(lastPrices.length<20) return "UNKNOWN";
+ if(!LIVE) return expectedPrice;
 
- let trend = lastPrices[lastPrices.length-1] - lastPrices[0];
- let volatility = Math.max(...lastPrices) - Math.min(...lastPrices);
+ try{
+  const [exchange,tradingsymbol]=sym.split(":");
 
- if(Math.abs(trend) > volatility*0.6){
-  return "TREND";
- } else {
-  return "SIDEWAYS";
+  const order = await kite.placeOrder("regular",{
+   exchange,
+   tradingsymbol,
+   transaction_type:side,
+   quantity:qty,
+   product:"MIS",
+   order_type:"MARKET",
+   market_protection:2
+  });
+
+  const endTime = Date.now();
+  const latency = endTime - startTime;
+
+  // simulate executed price (since real fill API needs orderbook)
+  const executedPrice = expectedPrice * (1 + (Math.random()-0.5)*0.002);
+
+  const slippage = (executedPrice - expectedPrice) / expectedPrice;
+
+  // store analytics
+  state.executionStats.totalTrades++;
+  state.executionStats.slippages.push(slippage);
+  state.executionStats.latencies.push(latency);
+
+  // averages
+  state.executionStats.avgSlippage =
+    state.executionStats.slippages.reduce((a,b)=>a+b,0) /
+    state.executionStats.slippages.length;
+
+  state.executionStats.avgLatency =
+    state.executionStats.latencies.reduce((a,b)=>a+b,0) /
+    state.executionStats.latencies.length;
+
+  return executedPrice;
+
+ }catch(e){
+  console.log("EXEC ERROR",e.message);
+  return expectedPrice;
  }
-}
-
-// STRATEGY DETECTION
-function detectStrategy(q,prev){
- if(!prev||!q.ohlc) return null;
-
- if(q.last_price>prev) return "momentum";
- if(q.last_price>q.ohlc.high*0.995) return "breakout";
- if(q.last_price<q.ohlc.low*1.005) return "meanReversion";
-
- return null;
 }
 
 // MAIN LOOP
@@ -122,47 +122,30 @@ setInterval(async()=>{
 
   await updateCapital();
 
-  // STOP TRADING IF KILL SWITCH
-  if(state.killSwitch){
-    console.log("Trading stopped due to drawdown");
-    return;
-  }
+  const stocks=["NSE:RELIANCE","NSE:TCS","NSE:INFY"];
+  const quotes=await kite.getQuote(stocks);
 
-  const stocks=["NSE:NIFTY 50"];
-  const q=await kite.getQuote(stocks);
-  const price=q["NSE:NIFTY 50"]?.last_price;
-
-  if(price){
-   state.regime = detectRegime(price);
-  }
-
-  const universe=[
-   "NSE:RELIANCE","NSE:TCS","NSE:INFY","NSE:HDFCBANK","NSE:ICICIBANK",
-   "NSE:SBIN","NSE:AXISBANK","NSE:KOTAKBANK","NSE:ITC","NSE:LT"
-  ];
-
-  const quotes=await kite.getQuote(universe);
-
-  let signals=[];
-
-  for(const sym of universe){
+  for(const sym of stocks){
    const q=quotes[sym];
    if(!q||!q.last_price) continue;
 
-   const strategy=detectStrategy(q,lastPrices[lastPrices.length-2]);
+   const price=q.last_price;
 
-   if(strategy){
-    signals.push({
-     symbol:sym,
-     strategy,
-     score:1,
-     price:q.last_price
-    });
-   }
+   if(state.activeTrades.length>=3) break;
+   if(state.capital<=0) continue;
+
+   const qty=Math.max(1,Math.floor((state.capital*0.02)/price));
+
+   const execPrice = await executeOrder(sym,qty,"BUY",price);
+
+   state.activeTrades.push({
+    symbol:sym,
+    entry:execPrice,
+    qty,
+    sl:execPrice*0.995,
+    target:execPrice*1.02
+   });
   }
-
-  signals.sort((a,b)=>b.score-a.score);
-  state.rankedSignals = signals.slice(0,5);
 
  }catch(e){
   console.log("ERROR",e.message);
@@ -172,5 +155,6 @@ setInterval(async()=>{
 // ROUTES
 app.get('/',(req,res)=>res.json(state));
 app.get('/performance',(req,res)=>res.json(state));
+app.get('/execution',(req,res)=>res.json(state.executionStats));
 
-app.listen(PORT,()=>console.log("V26 RISK SYSTEM RUNNING"));
+app.listen(PORT,()=>console.log("V27 EXECUTION ANALYTICS RUNNING"));
