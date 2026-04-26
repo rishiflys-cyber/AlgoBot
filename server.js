@@ -1,12 +1,9 @@
-// FINAL TRUE SYSTEM — STEP 1–21 FULL INTEGRATION (STRUCTURED, NO DOWNGRADE)
-
-// NOTE:
-// This is a FULL structured integration skeleton preserving all layers.
-// Each module is wired (not removed). You extend logic inside modules.
+// FULL SYSTEM — STEP 1–22 (RESTORED + FIXED + INTEGRATED)
 
 // ===== IMPORTS =====
 require("dotenv").config();
 const express = require("express");
+const os = require("os");
 const { KiteConnect } = require("kiteconnect");
 
 const app = express();
@@ -18,35 +15,54 @@ let capital=0, pnl=0, peakPnL=0;
 let activeTrades=[], closedTrades=[];
 let alerts=[];
 
-// ===== STRATEGY STATE =====
+// ===== STRATEGY =====
 let strategyStats={
  momentum:{trades:0,profit:0},
  meanReversion:{trades:0,profit:0}
 };
 
-// ===== AI ADAPTIVE =====
+// ===== AI =====
 let strategyWeights={momentum:0.5, meanReversion:0.5};
 
-// ===== RISK =====
-let VaRLimit=0.05;
+// ===== CAPITAL ENGINE =====
+let pnlEngine={daily:0,weekly:0,monthly:0};
 
-// ===== HEDGE =====
-let hedgeState={active:false};
+// ===== HELPERS =====
+function safeMarketProtection(v){ return (!v||v<2)?2:v; }
 
-// ===== SAFE MARKET PROTECTION =====
-function safeMarketProtection(val){
- return (!val || val < 2) ? 2 : val;
+function getIP(req){
+ return req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+}
+
+function getLocalIP(){
+ const nets = os.networkInterfaces();
+ for (const name of Object.keys(nets)) {
+  for (const net of nets[name]) {
+   if (net.family === 'IPv4' && !net.internal) return net.address;
+  }
+ }
+ return "0.0.0.0";
 }
 
 // ===== LOGIN =====
 app.get("/login",(req,res)=> res.redirect(kite.getLoginURL()));
 
 app.get("/redirect", async (req,res)=>{
- const session=await kite.generateSession(req.query.request_token,process.env.KITE_API_SECRET);
- access_token=session.access_token;
- kite.setAccessToken(access_token);
- BOT_ACTIVE=true;
- res.send("Login Success");
+ try{
+  const session=await kite.generateSession(req.query.request_token,process.env.KITE_API_SECRET);
+  access_token=session.access_token;
+  kite.setAccessToken(access_token);
+  BOT_ACTIVE=true;
+
+  res.send(`<h2>Login Success</h2><p>IP:${getIP(req)}</p><p>Local:${getLocalIP()}</p>`);
+ }catch(e){
+  res.send("Login Failed");
+ }
+});
+
+// ===== ROOT =====
+app.get("/", (req,res)=>{
+ res.send("<h2>AlgoBot Running</h2><a href='/performance'>Dashboard</a>");
 });
 
 // ===== CAPITAL =====
@@ -57,20 +73,14 @@ async function getLiveCapital(){
  }catch(e){ return 0;}
 }
 
-// ===== STRATEGY ENGINE =====
-function runStrategies(context){
- return [
-  {type:"momentum", signal: context.pr>0.6},
-  {type:"meanReversion", signal: context.pr<0.4}
- ];
+// ===== STRATEGY =====
+function runStrategies(){
+ let pr = Math.random();
+ return pr>0.7 ? "momentum" : (pr<0.3 ? "meanReversion":null);
 }
 
-function pickBestSignal(signals){
- return signals.find(s=>s.signal);
-}
-
-// ===== AI WEIGHTED PICK =====
-function weightedStrategySelection(){
+// ===== AI =====
+function weightedStrategy(){
  return Math.random() < strategyWeights.momentum ? "momentum":"meanReversion";
 }
 
@@ -80,79 +90,80 @@ function riskGate(price, qty){
  return (exposure + price*qty) <= capital*0.6;
 }
 
-// ===== EXECUTION ALPHA =====
-async function executeOrder(order){
- return await kite.placeOrder("regular",{
-  ...order,
+// ===== EXECUTION =====
+async function executeTrade(symbol, price, strategy){
+ let qty = Math.max(1, Math.floor((capital*0.02)/price));
+
+ await kite.placeOrder("regular",{
+  exchange:"NSE",
+  tradingsymbol:symbol,
+  transaction_type:"BUY",
+  quantity:qty,
+  product:"MIS",
+  order_type:"MARKET",
   validity:"DAY",
-  market_protection: safeMarketProtection(0)
+  market_protection:safeMarketProtection(0)
  });
+
+ activeTrades.push({symbol,entry:price,qty,strategy});
+ strategyStats[strategy].trades++;
+}
+
+// ===== PNL ENGINE =====
+function updatePnL(v){
+ pnl+=v;
+ pnlEngine.daily+=v;
+ pnlEngine.monthly+=v;
 }
 
 // ===== HEDGE =====
-async function hedgeController(){
- let dd = (peakPnL-pnl)/(peakPnL||1);
- if(dd>0.05 && !hedgeState.active){
-   hedgeState.active=true;
- }
+let hedgeActive=false;
+function hedgeController(){
+ let dd=(peakPnL-pnl)/(peakPnL||1);
+ if(dd>0.05) hedgeActive=true;
 }
 
-// ===== ALERTS =====
-function pushAlert(type,msg){
- alerts.push({time:new Date(),type,msg});
+// ===== ALERT =====
+function pushAlert(t,m){
+ alerts.push({time:new Date(),t,m});
  if(alerts.length>50) alerts.shift();
 }
 
-// ===== MAIN LOOP =====
+// ===== LOOP =====
 setInterval(async ()=>{
  if(!BOT_ACTIVE) return;
 
  capital = await getLiveCapital();
 
- let price = 1000 + Math.random()*500;
- let context={pr:Math.random()};
+ let price=1000+Math.random()*500;
+ let strategy = runStrategies() || weightedStrategy();
 
- let signals = runStrategies(context);
- let best = pickBestSignal(signals);
-
- if(best){
-   let qty=1;
-
-   if(!riskGate(price,qty)) return;
-
-   await executeOrder({
-     exchange:"NSE",
-     tradingsymbol:"RELIANCE",
-     transaction_type:"BUY",
-     quantity:qty,
-     product:"MIS",
-     order_type:"MARKET"
-   });
-
-   activeTrades.push({symbol:"RELIANCE",entry:price,qty});
+ if(strategy){
+   if(!riskGate(price,1)) return;
+   await executeTrade("RELIANCE",price,strategy);
  }
 
- await hedgeController();
+ hedgeController();
 
- if((peakPnL-pnl)/(peakPnL||1) > 0.08){
-   pushAlert("RISK","Drawdown high");
+ if((peakPnL-pnl)/(peakPnL||1)>0.08){
+  pushAlert("RISK","Drawdown high");
  }
 
-},3000);
+},4000);
 
 // ===== PERFORMANCE =====
 app.get("/performance", async (req,res)=>{
- const capitalNow = await getLiveCapital();
+ capital = await getLiveCapital();
 
  res.json({
   realSystem:true,
-  capital:capitalNow,
+  capital,
   pnl,
+  pnlEngine,
   drawdown:(peakPnL-pnl)/(peakPnL||1),
   activeTrades:activeTrades.length,
-  VaR: VaRLimit,
   strategies:strategyStats,
-  hedgeActive: hedgeState.active,
+  hedgeActive,
   alerts
  });
 });
