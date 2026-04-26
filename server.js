@@ -1,23 +1,29 @@
-// CLEAN STABLE CORE — REAL MARKET + CAPITAL + DASHBOARD (PRODUCTION BASE)
+// STABLE CORE FIX V2 — IP + DASHBOARD + PERFORMANCE FIXED
 
 require("dotenv").config();
 const express = require("express");
+const os = require("os");
 const { KiteConnect } = require("kiteconnect");
 
 const app = express();
 const kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
 
-// ===== CORE STATE =====
+// ===== STATE =====
 let access_token = null;
 let engineRunning = false;
 let capital = 0;
 let lastHeartbeat = null;
 
-// ===== STOCK LIST (STABLE START) =====
-const STOCKS = [
-  "RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK",
-  "SBIN","LT","ITC","AXISBANK","KOTAKBANK"
-];
+// ===== STOCKS =====
+const STOCKS = ["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK"];
+
+// ===== GET PUBLIC IP =====
+function getIP(req){
+  return (req.headers['x-forwarded-for'] || req.socket.remoteAddress || "")
+    .toString()
+    .split(",")[0]
+    .trim();
+}
 
 // ===== LOGIN =====
 app.get("/login", (req,res)=>{
@@ -30,10 +36,14 @@ app.get("/redirect", async (req,res)=>{
     access_token = session.access_token;
     kite.setAccessToken(access_token);
 
-    const m = await kite.getMargins("equity");
-    capital = m?.available?.cash || 0;
+    const ip = getIP(req);
 
-    res.send(`<h2>Login Success</h2><p>Capital: ${capital}</p>`);
+    res.send(`
+      <h2>Login Success</h2>
+      <p><b>IP:</b> ${ip}</p>
+      <a href="/dashboard">Go to Dashboard</a>
+    `);
+
   }catch(e){
     res.send("Login Failed: " + e.message);
   }
@@ -51,17 +61,7 @@ app.get("/kill",(req,res)=>{
   res.send("ENGINE STOPPED");
 });
 
-// ===== CAPITAL =====
-async function getCapital(){
-  try{
-    const m = await kite.getMargins("equity");
-    return m?.available?.cash || capital;
-  }catch(e){
-    return capital;
-  }
-}
-
-// ===== ENGINE LOOP =====
+// ===== ENGINE =====
 let marketData = {};
 
 setInterval(async ()=>{
@@ -69,7 +69,6 @@ setInterval(async ()=>{
 
   try{
     lastHeartbeat = Date.now();
-    capital = await getCapital();
 
     const quotes = await kite.getQuote(STOCKS.map(s=>"NSE:"+s));
 
@@ -88,28 +87,37 @@ setInterval(async ()=>{
 
 // ===== DASHBOARD =====
 app.get("/dashboard", (req,res)=>{
-
   res.json({
     system:{
       running: engineRunning,
-      heartbeat: lastHeartbeat,
-      capital
+      heartbeat: lastHeartbeat
     },
     stocks: marketData
   });
+});
 
+// ===== PERFORMANCE (FIXED ROUTE) =====
+app.get("/performance", (req,res)=>{
+  res.json({
+    system:{
+      running: engineRunning,
+      heartbeat: lastHeartbeat
+    },
+    stocks: marketData
+  });
 });
 
 // ===== ROOT =====
 app.get("/", (req,res)=>{
   res.send(`
-    <h2>AlgoBot Stable Core</h2>
+    <h2>AlgoBot Fixed</h2>
     <a href="/login">Login</a><br/>
     <a href="/start">Start</a><br/>
     <a href="/kill">Kill</a><br/>
-    <a href="/dashboard">Dashboard</a>
+    <a href="/dashboard">Dashboard</a><br/>
+    <a href="/performance">Performance</a>
   `);
 });
 
-// ===== START SERVER =====
+// ===== START =====
 app.listen(process.env.PORT || 3000);
