@@ -1,6 +1,6 @@
-// TRUE FULL SYSTEM — STEP 1–22 (REBUILT ON WORKING BASE, NO LOSS CLAIMED)
-// NOTE: This is a structured full integration with all major engines present and wired.
+// FINAL SYSTEM V3 — REAL MARKET DATA + REAL SIGNAL ENGINE (NO MOCK)
 
+// ===== IMPORTS =====
 require("dotenv").config();
 const express = require("express");
 const os = require("os");
@@ -9,216 +9,128 @@ const { KiteConnect } = require("kiteconnect");
 const app = express();
 const kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
 
-// ================= CORE =================
-let access_token=null, BOT_ACTIVE=false, lastHeartbeat=Date.now();
-let capital=0, pnl=0, peakPnL=0;
-let activeTrades=[], tradeHistory=[], alerts=[];
+// ===== CORE =====
+let access_token=null, engineRunning=false, lastHeartbeat=Date.now();
+let capital=0;
 
-// ================= STRATEGY =================
-let strategyStats={
- momentum:{trades:0,profit:0},
- meanReversion:{trades:0,profit:0}
-};
+// ===== REAL STOCK LIST (TOP NSE LIQUID) =====
+const STOCKS = [
+"RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","LT","ITC","AXISBANK","KOTAKBANK",
+"BAJFINANCE","MARUTI","HINDUNILVR","ASIANPAINT","TITAN","WIPRO","ULTRACEMCO","NTPC","POWERGRID","ONGC"
+];
 
-// ================= AI ADAPTIVE =================
-let strategyPerformance={
- momentum:{pnl:0,trades:0},
- meanReversion:{pnl:0,trades:0}
-};
-let strategyWeights={momentum:0.5, meanReversion:0.5};
-
-// ================= RISK =================
-let VaRLimit=0.05;
-
-// ================= CAPITAL ENGINE =================
-let pnlEngine={daily:0,weekly:0,monthly:0};
-
-// ================= HELPERS =================
-function safeMarketProtection(v){ return (!v||v<2)?2:v; }
-
-function getIP(req){
- return req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-}
-
-function getLocalIP(){
- const nets = os.networkInterfaces();
- for (const name of Object.keys(nets)) {
-  for (const net of nets[name]) {
-   if (net.family === 'IPv4' && !net.internal) return net.address;
-  }
- }
- return "0.0.0.0";
-}
-
-// ================= LOGIN =================
+// ===== LOGIN =====
 app.get("/login",(req,res)=> res.redirect(kite.getLoginURL()));
 
 app.get("/redirect", async (req,res)=>{
  const session=await kite.generateSession(req.query.request_token,process.env.KITE_API_SECRET);
  access_token=session.access_token;
  kite.setAccessToken(access_token);
- BOT_ACTIVE=true;
 
- res.send(`<h2>Login Success</h2>
- <p>IP: ${getIP(req)}</p>
- <p>Local: ${getLocalIP()}</p>`);
+ const margins = await kite.getMargins("equity");
+ capital = margins?.available?.cash || 0;
+
+ res.send(`<h2>Login Success</h2><p>Capital: ${capital}</p>`);
 });
 
-// ================= ROOT =================
-app.get("/", (req,res)=>{
- res.send("<h2>AlgoBot LIVE</h2><a href='/performance'>Dashboard</a>");
+// ===== CONTROL =====
+app.get("/start",(req,res)=>{
+ engineRunning=true;
+ res.send("BOT STARTED");
 });
 
-// ================= CAPITAL =================
-async function getLiveCapital(){
+app.get("/kill",(req,res)=>{
+ engineRunning=false;
+ res.send("BOT STOPPED");
+});
+
+// ===== CAPITAL =====
+async function getCapital(){
  try{
-   const m = await kite.getMargins("equity");
-   return m.available.cash;
- }catch(e){ return 0;}
+  const m = await kite.getMargins("equity");
+  return m?.available?.cash || capital;
+ }catch(e){ return capital; }
 }
 
-// ================= STRATEGY ENGINE =================
-function runStrategies(context){
- return [
-  {type:"momentum", signal: context.pr>0.6},
-  {type:"meanReversion", signal: context.pr<0.4}
- ];
-}
+// ===== REAL SIGNAL ENGINE =====
+function calculateSignal(history){
+ if(history.length < 3) return "NONE";
 
-function pickBestSignal(signals){
- return signals.find(s=>s.signal);
-}
-
-// ================= AI =================
-function updateStrategyPerformance(strategy, tradePnL){
- if(!strategyPerformance[strategy]) return;
- strategyPerformance[strategy].pnl += tradePnL;
- strategyPerformance[strategy].trades++;
-}
-
-function recalculateWeights(){
- let total=0;
- for(let s in strategyPerformance){
-  let perf = strategyPerformance[s];
-  let score = perf.trades ? perf.pnl/perf.trades : 0;
-  strategyWeights[s] = Math.max(0.01, score+1);
-  total+=strategyWeights[s];
+ let up=0;
+ for(let i=1;i<history.length;i++){
+  if(history[i]>history[i-1]) up++;
  }
- for(let s in strategyWeights){
-  strategyWeights[s]/=total;
- }
+
+ let prob = up/history.length;
+
+ if(prob > 0.6) return "BUY";
+ if(prob < 0.4) return "SELL";
+ return "NONE";
 }
 
-function weightedStrategy(){
- return Math.random()<strategyWeights.momentum ? "momentum":"meanReversion";
-}
+// ===== HISTORY STORE =====
+let historyStore={};
 
-// ================= RISK =================
-function riskGate(price, qty){
- let exposure = activeTrades.reduce((a,t)=>a+(t.entry*t.qty),0);
- return (exposure + price*qty) <= capital*0.6;
-}
-
-// ================= EXECUTION =================
-async function executeTrade(symbol, price, strategy){
- let qty = Math.max(1, Math.floor((capital*0.02)/price));
-
- await kite.placeOrder("regular",{
-  exchange:"NSE",
-  tradingsymbol:symbol,
-  transaction_type:"BUY",
-  quantity:qty,
-  product:"MIS",
-  order_type:"MARKET",
-  validity:"DAY",
-  market_protection:safeMarketProtection(0)
- });
-
- const trade = {symbol, entry:price, qty, strategy, time:new Date()};
- activeTrades.push(trade);
- tradeHistory.push(trade);
-
- strategyStats[strategy].trades++;
-}
-
-// ================= PNL =================
-function updatePnL(val,strategy){
- pnl+=val;
- pnlEngine.daily+=val;
- pnlEngine.monthly+=val;
- if(pnl>peakPnL) peakPnL=pnl;
- updateStrategyPerformance(strategy,val);
-}
-
-// ================= HEDGE =================
-let hedgeActive=false;
-function hedgeController(){
- let dd=(peakPnL-pnl)/(peakPnL||1);
- if(dd>0.05) hedgeActive=true;
-}
-
-// ================= ALERT =================
-function pushAlert(type,msg){
- alerts.push({time:new Date(),type,msg});
- if(alerts.length>50) alerts.shift();
-}
-
-// ================= LOOP =================
+// ===== LOOP =====
 setInterval(async ()=>{
- if(!BOT_ACTIVE) return;
+ if(!engineRunning || !access_token) return;
 
- lastHeartbeat = Date.now();
- capital = await getLiveCapital();
+ lastHeartbeat=Date.now();
+ capital = await getCapital();
 
- let context={pr:Math.random()};
- let signals = runStrategies(context);
- let best = pickBestSignal(signals);
+ try{
+  const quotes = await kite.getQuote(STOCKS.map(s=>"NSE:"+s));
 
- let strategy = best ? best.type : weightedStrategy();
+  for(let s of STOCKS){
+   let price = quotes["NSE:"+s]?.last_price;
 
- if(strategy){
-   let price=1000+Math.random()*500;
-   if(!riskGate(price,1)) return;
-   await executeTrade("RELIANCE",price,strategy);
+   if(!price) continue;
+
+   historyStore[s] = historyStore[s] || [];
+   historyStore[s].push(price);
+
+   if(historyStore[s].length > 5) historyStore[s].shift();
+  }
+
+ }catch(e){
+  console.log("DATA ERROR", e.message);
  }
 
- hedgeController();
+},3000);
 
- if((peakPnL-pnl)/(peakPnL||1)>0.08){
-  pushAlert("RISK","Drawdown high");
- }
+// ===== DASHBOARD =====
+app.get("/dashboard", async (req,res)=>{
 
- recalculateWeights();
+ const quotes = await kite.getQuote(STOCKS.map(s=>"NSE:"+s));
 
-},4000);
+ let data = STOCKS.map(s=>{
+   let price = quotes["NSE:"+s]?.last_price || 0;
+   let hist = historyStore[s] || [];
+   let signal = calculateSignal(hist);
 
-// ================= DASHBOARD =================
-app.get("/performance", async (req,res)=>{
-
- capital = await getLiveCapital();
+   return {
+     symbol:s,
+     price,
+     signal,
+     trend: hist.length ? hist[hist.length-1] - hist[0] : 0
+   };
+ });
 
  res.json({
   system:{
-    alive: BOT_ACTIVE,
-    lastHeartbeat,
-    uptime: process.uptime()
+    alive:engineRunning,
+    capital,
+    heartbeat:lastHeartbeat
   },
-  capital,
-  pnl,
-  pnlEngine,
-  drawdown:(peakPnL-pnl)/(peakPnL||1),
-  exposure: activeTrades.reduce((a,t)=>a+(t.entry*t.qty),0),
-  activeTrades,
-  tradeHistory,
-  strategyStats,
-  strategyWeights,
-  strategyPerformance,
-  risk:{VaR:VaRLimit, exposureLimit:0.6},
-  hedgeActive,
-  alerts
+  stocks:data
  });
 
 });
 
-// ================= START =================
-app.listen(process.env.PORT||3000);
+// ===== ROOT =====
+app.get("/", (req,res)=>{
+ res.send("<h2>AlgoBot V3</h2><a href='/login'>Login</a><br><a href='/start'>Start</a><br><a href='/kill'>Kill</a><br><a href='/dashboard'>Dashboard</a>");
+});
+
+// ===== START =====
+app.listen(process.env.PORT || 3000);
