@@ -1,5 +1,6 @@
 require('dotenv').config();
 const express = require('express');
+const axios = require('axios');
 const app = express();
 
 const PORT = process.env.PORT || 3000;
@@ -11,6 +12,25 @@ let activeTrades = [];
 let closedTrades = [];
 let scanOutput = [];
 
+let accessToken = null;
+
+// ===== LOGIN ROUTE =====
+app.get('/login', (req, res) => {
+  const url = `https://kite.zerodha.com/connect/login?api_key=${process.env.KITE_API_KEY}`;
+  res.redirect(url);
+});
+
+// ===== REDIRECT =====
+app.get('/redirect', async (req, res) => {
+  const requestToken = req.query.request_token;
+
+  // NOTE: token exchange placeholder (needs kite SDK normally)
+  accessToken = requestToken;
+
+  res.send("Login success. Token stored.");
+});
+
+// ===== DASHBOARD =====
 app.get('/', (req, res) => {
   res.json({
     botActive,
@@ -23,6 +43,7 @@ app.get('/', (req, res) => {
   });
 });
 
+// ===== MOCK LOOP =====
 setInterval(() => {
   scanOutput = [];
 

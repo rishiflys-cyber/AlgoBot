@@ -1,13 +1,15 @@
-# AlgoBot Railway Ready
+# AlgoBot Kite Login Upgrade
+
+## New Features
+- /login route
+- /redirect route
+- token capture (basic)
 
 ## Setup
-1. Copy .env.example to .env
-2. Fill credentials
-3. Run:
-   npm install
-   npm start
+npm install
+npm start
 
-## Deploy (Railway)
-- Push to GitHub
-- Deploy repo
-- Add env variables in Railway dashboard
+## Flow
+1. Open /login
+2. Login Zerodha
+3. Redirect to /redirect
