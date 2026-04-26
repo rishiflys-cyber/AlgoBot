@@ -1,72 +1,65 @@
 
 require('dotenv').config();
 const express = require('express');
-const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ===== STATE =====
-let strategies = [
-  { name: "momentum", pnl: 0, active: true },
-  { name: "volume", pnl: 0, active: true },
-  { name: "volatility", pnl: 0, active: true }
-];
+// ===== CONFIG =====
+let capital = 1000000; // example
+let pnl = 0;
+let maxDrawdown = -0.05 * capital;
+let alertTriggered = false;
+let killSwitch = false;
 
-let capitalAllocation = {};
-
-// ===== SIMULATE PERFORMANCE UPDATE =====
-function updatePerformance() {
-  strategies = strategies.map(s => {
-    const change = (Math.random() - 0.5) * 100;
-    return { ...s, pnl: s.pnl + change };
-  });
+// ===== ALERT FUNCTION =====
+function triggerAlert(message) {
+  console.log("ALERT:", message);
+  alertTriggered = true;
 }
 
-// ===== ROTATION LOGIC =====
-function rotateStrategies() {
-  // deactivate worst performer
-  const sorted = [...strategies].sort((a,b)=>b.pnl-a.pnl);
-
-  strategies = strategies.map(s => ({
-    ...s,
-    active: sorted.indexOf(s) < 2 // keep top 2 active
-  }));
+// ===== KILL SWITCH =====
+function activateKillSwitch(reason) {
+  console.log("KILL SWITCH ACTIVATED:", reason);
+  killSwitch = true;
 }
 
-// ===== CAPITAL REALLOCATION =====
-function rebalanceCapital() {
-  const active = strategies.filter(s => s.active);
-  const total = active.reduce((a,b)=>a + Math.max(b.pnl,0), 0) || 1;
-
-  capitalAllocation = {};
-
-  active.forEach(s => {
-    capitalAllocation[s.name] = Math.max(s.pnl,0) / total;
-  });
-}
-
-// ===== MAIN LOOP =====
+// ===== SIMULATION LOOP =====
 setInterval(() => {
-  updatePerformance();
-  rotateStrategies();
-  rebalanceCapital();
-}, 3000);
+
+  if (killSwitch) return;
+
+  // simulate pnl fluctuation
+  pnl += (Math.random() - 0.5) * 20000;
+
+  // ALERT CONDITIONS
+  if (pnl < -0.03 * capital && !alertTriggered) {
+    triggerAlert("Drawdown crossed 3%");
+  }
+
+  // KILL SWITCH CONDITIONS
+  if (pnl < maxDrawdown) {
+    activateKillSwitch("Max drawdown breached");
+  }
+
+}, 2000);
 
 // ===== ROUTES =====
 app.get('/', (req, res) => {
   res.json({
-    strategies,
-    capitalAllocation
+    capital,
+    pnl,
+    alertTriggered,
+    killSwitch
   });
 });
 
-app.get('/performance', (req, res) => {
+app.get('/status', (req, res) => {
   res.json({
-    activeStrategies: strategies.filter(s=>s.active).map(s=>s.name),
-    allocation: capitalAllocation,
-    time: new Date().toISOString()
+    systemActive: !killSwitch,
+    alert: alertTriggered,
+    pnl
   });
 });
 
-app.listen(PORT, () => console.log("Rebalancer Running"));
+app.listen(PORT, () => console.log("Risk Kill Switch Running"));

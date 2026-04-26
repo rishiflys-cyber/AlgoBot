@@ -1,7 +1,8 @@
 
-LIVE PORTFOLIO REBALANCING + STRATEGY ROTATION
+AUTOMATED ALERTS + RISK KILL SWITCH
 
-- Automatically disables worst strategies
-- Keeps top performers active
-- Dynamically reallocates capital
-- Runs continuous rotation loop
+Features:
+- Drawdown alerts (3%)
+- Hard kill switch at 5% loss
+- Prevents further execution
+- Status monitoring endpoint
