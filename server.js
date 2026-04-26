@@ -15,6 +15,7 @@ if (accessToken) kite.setAccessToken(accessToken);
 let capital = 0;
 let activeTrades = [];
 let closedTrades = [];
+let tradeHistory = [];
 
 // LOGIN
 app.get('/login', (req, res) => res.redirect(kite.getLoginURL()));
@@ -33,16 +34,24 @@ async function updateCapital() {
   capital = m?.equity?.available?.cash || m?.equity?.net || capital;
 }
 
-// TRAILING SL + DYNAMIC EXIT
-function manageTrade(trade, currentPrice) {
-  if (trade.side === "BUY") {
-    if (currentPrice > trade.entry) {
-      trade.stopLoss = Math.max(trade.stopLoss, currentPrice * 0.995);
-    }
+// PERFORMANCE ANALYSIS
+function getWinRate() {
+  if (tradeHistory.length === 0) return 0.5;
+  const wins = tradeHistory.filter(t => t.pnl > 0).length;
+  return wins / tradeHistory.length;
+}
 
-    if (currentPrice < trade.stopLoss) return "EXIT";
-  }
-  return "HOLD";
+// ADAPTIVE RISK
+function getRiskPercent() {
+  const winRate = getWinRate();
+  if (winRate > 0.6) return 0.04;
+  if (winRate < 0.4) return 0.01;
+  return 0.02;
+}
+
+// ENTRY FILTER (QUALITY)
+function isHighQuality(signalStrength) {
+  return signalStrength > 0.65;
 }
 
 // LOOP
@@ -54,34 +63,40 @@ setInterval(async () => {
   const symbols = ["NSE:RELIANCE","NSE:TCS","NSE:INFY"];
   const quotes = await kite.getQuote(symbols);
 
-  // MANAGE TRADES
+  // MANAGE EXISTING
   activeTrades = activeTrades.filter(tr => {
     const q = quotes[tr.symbol];
     if (!q) return true;
 
-    const decision = manageTrade(tr, q.last_price);
+    const pnl = (q.last_price - tr.entry) * tr.qty;
 
-    if (decision === "EXIT") {
-      closedTrades.push({
-        ...tr,
-        exit: q.last_price
-      });
+    if (pnl > tr.entry * 0.01 || pnl < -tr.entry * 0.005) {
+      tradeHistory.push({ pnl });
+      closedTrades.push({ ...tr, exit: q.last_price, pnl });
       return false;
     }
+
     return true;
   });
 
-  // MOCK ENTRY (for testing)
+  // NEW ENTRIES (TOP QUALITY ONLY)
   if (activeTrades.length < 3) {
     const sym = symbols[Math.floor(Math.random() * symbols.length)];
     const q = quotes[sym];
     if (!q) return;
 
+    const signalStrength = Math.random(); // replace with real score later
+
+    if (!isHighQuality(signalStrength)) return;
+
+    const risk = getRiskPercent();
+    const qty = Math.max(1, Math.floor((capital * risk) / q.last_price));
+
     activeTrades.push({
       symbol: sym,
-      side: "BUY",
       entry: q.last_price,
-      stopLoss: q.last_price * 0.99
+      qty,
+      strength: signalStrength
     });
   }
 
@@ -91,9 +106,10 @@ setInterval(async () => {
 app.get('/', (req, res) => {
   res.json({
     capital,
+    winRate: getWinRate(),
     activeTrades,
     closedTrades
   });
 });
 
-app.listen(PORT, () => console.log("Trade Management Engine Running"));
+app.listen(PORT, () => console.log("Profit Optimization Running"));

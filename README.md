@@ -1,8 +1,6 @@
 
-Step 100/100
-Institutional Rating: 10/10
+Profit Optimization Layer
 
-Trade Management Engine:
-- Trailing Stop Loss
-- Dynamic Exit
-- Trade lifecycle control
+- Adaptive risk based on win rate
+- Trade filtering (high-quality only)
+- Performance feedback loop
