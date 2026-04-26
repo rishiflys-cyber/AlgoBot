@@ -1,8 +1,7 @@
 
-Live Performance Dashboard
+Edge Refinement System
 
-Features:
-- Equity curve tracking
-- Trade history logging
-- Win rate, avg PnL metrics
-- Real-time analytics endpoint
+- Backtesting engine
+- Trade journaling (persistent)
+- Performance analysis (win rate, avg pnl)
+- Continuous refinement loop
