@@ -1,1 +1,0 @@
-module.exports.isDrawdownSafe=(p,c)=>(p/c)>-0.02

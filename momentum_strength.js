@@ -1,1 +1,0 @@
-module.exports.isMomentumStrong=(arr)=>arr&&arr.filter((v,i)=>i>0&&v>arr[i-1]).length>=3

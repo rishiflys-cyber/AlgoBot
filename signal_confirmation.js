@@ -1,1 +1,0 @@
-let l={};module.exports.confirmSignal=(s,n)=>{if(!n){l[s]=null;return null;}if(l[s]===n){l[s]=null;return n;}l[s]=n;return null;}

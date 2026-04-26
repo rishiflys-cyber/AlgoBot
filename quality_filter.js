@@ -1,1 +1,0 @@
-module.exports.isHighQualityMove=(p,c)=>!p||Math.abs(c-p)/p>0.001

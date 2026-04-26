@@ -1,1 +1,0 @@
-module.exports.getPositionSize=(c,p,CFG)=>Math.max(1,Math.floor((c/CFG.MAX_TRADES)/p))

@@ -1,1 +1,0 @@
-let t={};module.exports={canTradeSymbol:(s)=>!t[s]||Date.now()-t[s]>300000,markTraded:(s)=>t[s]=Date.now()}

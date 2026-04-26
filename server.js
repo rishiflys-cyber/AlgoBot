@@ -1,128 +1,54 @@
-// FINAL UNIFIED SERVER — CAPITAL FIX APPLIED
-
-require("dotenv").config();
-const express = require("express");
-const os = require("os");
-const { KiteConnect } = require("kiteconnect");
-
+require('dotenv').config();
+const express = require('express');
 const app = express();
-const kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
 
-// ===== STATE =====
-let access_token = null;
-let engineRunning = false;
+const PORT = process.env.PORT || 3000;
+
+let botActive = true;
 let capital = 0;
-let lastHeartbeat = null;
-
-let marketData = {};
-let activeTrades = [];
 let pnl = 0;
-let peakPnL = 0;
-let alerts = [];
+let activeTrades = [];
+let closedTrades = [];
+let scanOutput = [];
 
-const STOCKS = [
-  "RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK",
-  "SBIN","LT","ITC","AXISBANK","KOTAKBANK"
-];
-
-function getIP(req){
-  return (req.headers['x-forwarded-for'] || req.socket.remoteAddress || "")
-    .toString().split(",")[0].trim();
-}
-
-// ===== CAPITAL FIX =====
-async function getCapital(){
-  try{
-    const m = await kite.getMargins();
-
-    console.log("FULL MARGINS:", JSON.stringify(m, null, 2));
-
-    return (
-      m?.equity?.available?.cash ||
-      m?.equity?.net ||
-      m?.equity?.available?.live_balance ||
-      m?.commodity?.available?.cash ||
-      0
-    );
-  }catch(e){
-    console.log("CAPITAL ERROR:", e.message);
-    return 0;
-  }
-}
-
-// ===== LOGIN =====
-app.get("/login", (req,res)=>{
-  res.redirect(kite.getLoginURL());
+app.get('/', (req, res) => {
+  res.json({
+    botActive,
+    capital,
+    pnl,
+    activeTrades,
+    closedTrades,
+    scanOutput,
+    serverIP: "AUTO"
+  });
 });
 
-app.get("/redirect", async (req,res)=>{
-  try{
-    const session = await kite.generateSession(req.query.request_token, process.env.KITE_API_SECRET);
-    access_token = session.access_token;
-    kite.setAccessToken(access_token);
+setInterval(() => {
+  scanOutput = [];
 
-    capital = await getCapital();
+  const symbols = ["RELIANCE", "TCS", "INFY"];
 
-    res.send(`<h2>Login Success</h2><p>IP: ${getIP(req)}</p><a href="/">Go Home</a>`);
-  }catch(e){
-    res.send("Login Failed: " + e.message);
-  }
-});
+  symbols.forEach(symbol => {
+    const price = Math.random() * 1000;
+    const probability = Math.random();
+    const volumeBreakout = Math.random() * 2;
+    const agreementScore = Math.floor(Math.random() * 3);
 
-// ===== CONTROL =====
-app.get("/start",(req,res)=>{
-  if(!access_token) return res.send("Login first");
-  engineRunning = true;
-  res.send("STARTED");
-});
+    const signal = (probability > 0.6 && agreementScore >= 2) ? "BUY" : null;
 
-app.get("/kill",(req,res)=>{
-  engineRunning = false;
-  res.send("STOPPED");
-});
+    scanOutput.push({
+      symbol,
+      price,
+      probability,
+      volume: Math.floor(Math.random()*100000),
+      volumeBreakout,
+      indexTrend: "UP",
+      agreementScore,
+      signal,
+      reason: "Base logic"
+    });
+  });
 
-// ===== ENGINE =====
-setInterval(async ()=>{
-  if(!engineRunning || !access_token) return;
+}, 3000);
 
-  try{
-    lastHeartbeat = Date.now();
-    capital = await getCapital();
-
-    const quotes = await kite.getQuote(STOCKS.map(s=>"NSE:"+s));
-
-    for(let s of STOCKS){
-      marketData[s] = {
-        price: quotes["NSE:"+s]?.last_price || 0,
-        change: quotes["NSE:"+s]?.net_change || 0
-      };
-    }
-
-  }catch(e){
-    console.log("ENGINE ERROR:", e.message);
-  }
-
-},3000);
-
-// ===== ROOT =====
-app.get("/", async (req,res)=>{
-
-  let cap = await getCapital();
-
-  res.send(`
-    <h2>AlgoBot Control Panel</h2>
-    <p>IP: ${getIP(req)}</p>
-    <p>Capital: ${cap}</p>
-    <p>Status: ${engineRunning ? "RUNNING":"STOPPED"}</p>
-    <p>Heartbeat: ${lastHeartbeat || "N/A"}</p>
-
-    <a href="/login">Login</a><br/>
-    <a href="/start">Start</a><br/>
-    <a href="/kill">Kill</a><br/>
-
-    <hr/>
-    <pre>${JSON.stringify(marketData,null,2)}</pre>
-  `);
-});
-
-app.listen(process.env.PORT || 3000);
+app.listen(PORT, () => console.log("Server running on port " + PORT));

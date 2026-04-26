@@ -1,1 +1,0 @@
-module.exports.isSlippageSafe=(e,c)=>!e||Math.abs(c-e)/e<=0.002

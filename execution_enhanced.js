@@ -1,1 +1,0 @@
-module.exports.safeOrderEnhanced=async(k,f)=>{try{return await f();}catch{return null;}}

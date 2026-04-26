@@ -1,1 +1,0 @@
-let t={};module.exports={markEntry:(s)=>t[s]=Date.now(),shouldExit:(s)=>Date.now()-t[s]>900000,clear:(s)=>delete t[s]}
