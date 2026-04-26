@@ -27,13 +27,14 @@ let state = {
   pnl: 0,
   activeTrades: [],
   closedTrades: [],
-  serverIP: null,
+  winRate: 0,
+  avgWin: 0,
+  avgLoss: 0,
   mode: LIVE ? "LIVE" : "PAPER"
 };
 
 let lastPrice = {};
-let lastTradeTime = {};
-const COOLDOWN = 300000;
+let tradeHistory = [];
 
 // LOGIN
 app.get('/login', (req,res)=>res.redirect(kite.getLoginURL()));
@@ -44,13 +45,9 @@ app.get('/redirect', async (req,res)=>{
     accessToken = session.access_token;
     kite.setAccessToken(accessToken);
     fs.writeFileSync(TOKEN_FILE, JSON.stringify({token: accessToken}));
-
-    const ip = await axios.get("https://api.ipify.org?format=json");
-    state.serverIP = ip.data.ip;
-
-    res.send("Login success | IP: " + state.serverIP);
+    res.send("Login success");
   }catch(e){
-    res.send("Login failed: " + e.message);
+    res.send("Login failed");
   }
 });
 
@@ -59,19 +56,38 @@ async function updateCapital(){
   try{
     const m = await kite.getMargins();
     state.capital = m?.equity?.available?.cash || m?.equity?.net || state.capital;
-  }catch(e){
-    console.log("MARGIN ERROR:", e.message);
-  }
+  }catch{}
 }
 
-// SCORE
-function getScore(price, prev){
+// ALPHA SCORE (multi-factor)
+function getAlphaScore(q, prev){
   if(!prev) return 0;
-  let s=0;
-  if(price>prev) s++;
-  if(price>prev*1.002) s++;
-  if(price>prev*1.004) s++;
-  return s;
+
+  let score = 0;
+
+  // momentum
+  if(q.last_price > prev) score++;
+
+  // breakout
+  if(q.last_price > q.ohlc.high * 0.995) score++;
+
+  // trend
+  if(q.last_price > q.ohlc.open) score++;
+
+  // volatility expansion
+  if((q.ohlc.high - q.ohlc.low)/q.last_price > 0.01) score++;
+
+  return score;
+}
+
+// UPDATE STATS
+function updateStats(){
+  const wins = tradeHistory.filter(t => t.pnl > 0);
+  const losses = tradeHistory.filter(t => t.pnl <= 0);
+
+  state.winRate = wins.length / (tradeHistory.length || 1);
+  state.avgWin = wins.length ? wins.reduce((a,b)=>a+b.pnl,0)/wins.length : 0;
+  state.avgLoss = losses.length ? losses.reduce((a,b)=>a+b.pnl,0)/losses.length : 0;
 }
 
 // EXECUTION
@@ -93,66 +109,58 @@ async function executeOrder(symbol, qty, side){
 setInterval(async ()=>{
   if(!accessToken) return;
 
-  if(state.pnl < -200) return; // kill switch
-
   await updateCapital();
 
   const quotes = await kite.getQuote(STOCKS);
+
+  let signals = [];
 
   for(const sym of STOCKS){
     const q = quotes[sym];
     if(!q) continue;
 
-    const price = q.last_price;
+    const score = getAlphaScore(q, lastPrice[sym]);
+    lastPrice[sym] = q.last_price;
 
-    // trend filter
-    if (price < q.ohlc.open) continue;
+    if(score >= 3){
+      signals.push({sym, score, price: q.last_price});
+    }
+  }
 
-    // cooldown
-    if (lastTradeTime[sym] && Date.now() - lastTradeTime[sym] < COOLDOWN) continue;
+  signals.sort((a,b)=>b.score-a.score);
 
-    const score = getScore(price, lastPrice[sym]);
-    lastPrice[sym]=price;
-
-    if(score < 3) continue;
-
+  for(const s of signals){
     if(state.activeTrades.length >= 2) break;
 
-    const qty = Math.max(1, Math.floor((state.capital * 0.01) / price));
-    if(qty <= 0) continue;
+    const qty = Math.max(1, Math.floor((state.capital * 0.01)/s.price));
 
-    const volatility = price * 0.003;
-
-    await executeOrder(sym, qty, "BUY");
-
-    lastTradeTime[sym] = Date.now();
+    await executeOrder(s.sym, qty, "BUY");
 
     state.activeTrades.push({
-      symbol:sym,
-      entry:price,
+      symbol: s.sym,
+      entry: s.price,
       qty,
-      sl:price - volatility,
-      target:price + (volatility*2),
-      entryTime: Date.now(),
-      score
+      sl: s.price * 0.995,
+      target: s.price * 1.02,
+      score: s.score
     });
   }
 
   // exits
   state.activeTrades = state.activeTrades.filter(tr=>{
     const cp = lastPrice[tr.symbol];
+
     if(cp >= tr.target || cp <= tr.sl){
       const pnl = (cp - tr.entry) * tr.qty;
       state.pnl += pnl;
 
+      tradeHistory.push({ pnl, score: tr.score });
+
+      updateStats();
+
       executeOrder(tr.symbol, tr.qty, "SELL");
 
-      state.closedTrades.push({
-        ...tr,
-        exit: cp,
-        pnl,
-        exitTime: Date.now()
-      });
+      state.closedTrades.push({ ...tr, exit: cp, pnl });
 
       return false;
     }
@@ -165,4 +173,4 @@ setInterval(async ()=>{
 app.get('/', (req,res)=>res.json(state));
 app.get('/performance', (req,res)=>res.json(state));
 
-app.listen(PORT, ()=>console.log("PROFIT OPTIMIZED V14 RUNNING"));
+app.listen(PORT, ()=>console.log("ALPHA SYSTEM V15 RUNNING"));
