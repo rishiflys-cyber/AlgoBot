@@ -2,7 +2,6 @@
 require('dotenv').config();
 const express=require('express');
 const fs=require('fs');
-const axios=require('axios');
 const KiteConnect=require("kiteconnect").KiteConnect;
 
 const app=express();
@@ -14,10 +13,8 @@ const TOKEN_FILE="access_token.json";
 let kite=new KiteConnect({api_key:process.env.KITE_API_KEY});
 let accessToken=null;
 
-// ===== STATE =====
 let state={
  capital:0,
- pnl:0,
  executionStats:{
   totalTrades:0,
   avgSlippage:0,
@@ -26,13 +23,9 @@ let state={
   latencies:[]
  },
  activeTrades:[],
- closedTrades:[],
  mode:LIVE?"LIVE":"PAPER"
 };
 
-let lastPrice={};
-
-// LOAD TOKEN
 if(fs.existsSync(TOKEN_FILE)){
  try{
   const saved=JSON.parse(fs.readFileSync(TOKEN_FILE));
@@ -50,9 +43,7 @@ app.get('/redirect',async(req,res)=>{
   accessToken=session.access_token;
   kite.setAccessToken(accessToken);
   fs.writeFileSync(TOKEN_FILE,JSON.stringify({token:accessToken}));
-
-  const ip=await axios.get("https://api.ipify.org?format=json");
-  res.send("Login success | IP: "+ip.data.ip);
+  res.send("Login success");
  }catch{
   res.send("Login failed");
  }
@@ -62,20 +53,20 @@ app.get('/redirect',async(req,res)=>{
 async function updateCapital(){
  try{
   const m=await kite.getMargins();
-  state.capital = m?.equity?.available?.cash || m?.equity?.net || state.capital;
+  state.capital=m?.equity?.available?.cash||state.capital;
  }catch{}
 }
 
-// EXECUTION WITH ANALYTICS
+// REAL EXECUTION WITH ORDERBOOK
 async function executeOrder(sym, qty, side, expectedPrice){
- const startTime = Date.now();
+ const start=Date.now();
 
  if(!LIVE) return expectedPrice;
 
  try{
   const [exchange,tradingsymbol]=sym.split(":");
 
-  const order = await kite.placeOrder("regular",{
+  const orderId = await kite.placeOrder("regular",{
    exchange,
    tradingsymbol,
    transaction_type:side,
@@ -85,20 +76,21 @@ async function executeOrder(sym, qty, side, expectedPrice){
    market_protection:2
   });
 
-  const endTime = Date.now();
-  const latency = endTime - startTime;
+  // fetch orderbook
+  const orders = await kite.getOrders();
+  const order = orders.find(o=>o.order_id===orderId);
 
-  // simulate executed price (since real fill API needs orderbook)
-  const executedPrice = expectedPrice * (1 + (Math.random()-0.5)*0.002);
+  const end=Date.now();
+  const latency=end-start;
 
-  const slippage = (executedPrice - expectedPrice) / expectedPrice;
+  let executedPrice = order?.average_price || expectedPrice;
 
-  // store analytics
+  let slippage = (executedPrice - expectedPrice) / expectedPrice;
+
   state.executionStats.totalTrades++;
   state.executionStats.slippages.push(slippage);
   state.executionStats.latencies.push(latency);
 
-  // averages
   state.executionStats.avgSlippage =
     state.executionStats.slippages.reduce((a,b)=>a+b,0) /
     state.executionStats.slippages.length;
@@ -110,30 +102,28 @@ async function executeOrder(sym, qty, side, expectedPrice){
   return executedPrice;
 
  }catch(e){
-  console.log("EXEC ERROR",e.message);
+  console.log("REAL EXEC ERROR",e.message);
   return expectedPrice;
  }
 }
 
-// MAIN LOOP
+// LOOP
 setInterval(async()=>{
  try{
   if(!accessToken) return;
 
   await updateCapital();
 
-  const stocks=["NSE:RELIANCE","NSE:TCS","NSE:INFY"];
+  const stocks=["NSE:RELIANCE","NSE:TCS"];
   const quotes=await kite.getQuote(stocks);
 
   for(const sym of stocks){
    const q=quotes[sym];
    if(!q||!q.last_price) continue;
 
+   if(state.activeTrades.length>=2) break;
+
    const price=q.last_price;
-
-   if(state.activeTrades.length>=3) break;
-   if(state.capital<=0) continue;
-
    const qty=Math.max(1,Math.floor((state.capital*0.02)/price));
 
    const execPrice = await executeOrder(sym,qty,"BUY",price);
@@ -141,9 +131,7 @@ setInterval(async()=>{
    state.activeTrades.push({
     symbol:sym,
     entry:execPrice,
-    qty,
-    sl:execPrice*0.995,
-    target:execPrice*1.02
+    qty
    });
   }
 
@@ -154,7 +142,6 @@ setInterval(async()=>{
 
 // ROUTES
 app.get('/',(req,res)=>res.json(state));
-app.get('/performance',(req,res)=>res.json(state));
 app.get('/execution',(req,res)=>res.json(state.executionStats));
 
-app.listen(PORT,()=>console.log("V27 EXECUTION ANALYTICS RUNNING"));
+app.listen(PORT,()=>console.log("V28 REAL EXECUTION RUNNING"));
