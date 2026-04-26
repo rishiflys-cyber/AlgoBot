@@ -1,0 +1,184 @@
+[33m65ea50e[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m FINAL: auto tax reserve + withdrawal tracker
+[33mbf7526c[m FINAL: monthly capital planner + auto reinvest system
+[33ma08731e[m FINAL: fund-style control panel (capital + risk + decision engine)
+[33m92697da[m FINAL: weekly performance report + auto tuning summary
+[33m371708d[m FINAL: auto capital scaling based on expectancy (adaptive compounding)
+[33m0143c52[m Upgrade: expectancy + edge validation module (core performance metric)
+[33md2202c0[m FINAL: multi-broker routing + smart order routing (SOR)
+[33ma8b56aa[m FINAL: cross-market arbitrage + options overlay (relative value + hedging layer)
+[33mf3dc43f[m FINAL: microstructure edge (order book + liquidity filter)
+[33mfa69dfa[m FINAL: broker execution optimization (latency tracking + order slicing)
+[33m5d407db[m FINAL: institutional risk overlay (VaR + exposure control)
+[33m1ca57b4[m FINAL: strategy rotation + dynamic capital allocation per strategy
+[33mf714128[m Upgrade: multi-strategy portfolio engine (momentum + mean reversion + breakout)
+[33mc5cc48c[m FINAL: safe auto-optimization using insights (bounded adaptive system)
+[33m5f4dbd3[m Upgrade: live vs shadow comparison + auto insights engine
+[33m99fcc62[m Upgrade: shadow simulator (non-intrusive parallel system)
+[33ma9800dc[m FINAL RISK CONTROL: auto-disable trading + recovery mode
+[33m50160d4[m Upgrade: equity graph UI + drawdown alert system
+[33m5efec77[m Upgrade: live equity curve + drawdown dashboard
+[33mf3918af[m FINAL: compliance mode + rejection engine + entry precision + drawdown control + market protection fix
+[33maf9547a[m Upgrade: analytics dashboard + adaptive capital scaling
+[33m805e327[m FINAL: institutional build (stable + MTF + AI + portfolio + IST safe)
+[33mbee55f6[m Stability layer: crash-proofing + safe execution base
+[33m0c572fe[m AI Upgrade: adaptive thresholds + self-learning engine
+[33m23c79af[m FINAL: Portfolio allocator + clustering control + IST timing (institutional upgrade)
+[33m4b2d38f[m Upgrade: MTF + Top-5 ranking activated (non-breaking execution filter)
+[33m415ff7b[m Upgrade: MTF + ranking + advanced sizing + portfolio risk guard
+[33me8e3194[m Hotfix: crash resolved + safe guards + stable volatility SL
+[33ma8575e0[m Production upgrade (non-breaking enhancements)
+[33mdb6a6fc[m FINAL FIX: dashboard restored + IP visible + multi-strategy intact
+[33m0b06b62[m FINAL: volume breakout + index alignment + compounding + full system
+[33m6cd560e[m FINAL: index filter + compounding + full dashboard intact
+[33m834e380[m FIX: dashboard restored + dynamic compounding added
+[33m5376b21[m V2: dynamic compounding position sizing + execution fix
+[33m8b89ab0[m FINAL: profit optimizer + regime + trailing + risk control
+[33m7516903[m FINAL: market regime filter + intelligent trading layer
+[33md1d10f6[m FINAL PROFIT LAYER: scan visibility + reason + pnl + capital
+[33m7c0c116[m FINAL PRO: botActive + capital + pnl + 200 scan + trade history
+[33m334eb6e[m FINAL: 200+ scanner + capital + pnl + login + stable execution
+[33m5d437b1[m FINAL FIX: login route + real pnl tracking + stable system
+[33m186c5fa[m FINAL: restart-safe bot + IP display + no trade loss
+[33m56b6935[m FINAL: live pnl tracking + execution stable
+[33mf47a2bf[m FINAL: aggressive safe bot (cooldown + loss guard + controlled execution)
+[33m31ec219[m FINAL: adaptive threshold + market-aware trading system
+[33mf5c4cae[m FINAL: balanced entry (core + relaxed scout)
+[33m368e970[m UPDATE: trend filter + entry improvement
+[33m84d5630[m FINAL EVOLUTION: profit optimized (0.35% target + 0.2% SL)
+[33m47fa06e[m FINAL: entry + exit + profit system (money magnet stage)
+[33mf975579[m FINAL: market protection fix + real execution enabled
+[33m914f2fc[m FINAL: execution logging + trade failure visibility fix
+[33m6ed835c[m FINAL: scout + core logic fix (trade activation unlocked)
+[33md5a7704[m FINAL: 200+ bot + UI restored + execution stable
+[33m72e63cc[m FINAL: 200+ stock scanner with smart filter + controlled execution
+[33m444a86c[m FINAL: scout + core trading logic (balanced execution)
+[33m78bb8fb[m FINAL EDGE BOT: momentum + probability + controlled execution
+[33m8ff0f15[m FINAL: money magnet bot (forced execution + capital sizing + full dashboard)
+[33m8232a36[m FINAL FIX: UI + scan + capital + trading all working
+[33m9505761[m FINAL TRADING PATCH: controlled aggression + execution unlock
+[33m876d99e[m FINAL STABLE BOT: capital + pnl + scan + execution fixed
+[33m94c4be1[m FIX: robust capital sync (multi-source margin parsing)
+[33mfe2b4dc[m FINAL UPGRADE: capital sync + real-time PnL + stable execution
+[33med0f4d1[m FINAL STABLE: UI + execution + signal unlock + working deploy
+[33md47b508[m FINAL FIX: UI route restored + server confirmed
+[33m11d503e[m FINAL SIGNAL UNLOCK: forced signal in strong mode + execution stable
+[33mf2e52a0[m FINAL PRODUCTION: pro mode + execution unlocked + clean dashboard + full logging
+[33m1a3b76e[m FINAL CLEAN EXECUTION: no cooldown block + full logs + stable trading
+[33m2462788[m FINAL UNLOCK: signal fallback + execution fix + active dashboard
+[33m6e61f52[m FINAL TRUE FIX: direct execution + no silent failure + accurate dashboard
+[33md42a8da[m FINAL: dynamic threshold + execution fix + active dashboard
+[33mf326211[m FINAL FIX: execution layer + dashboard + active status + guaranteed trade attempt
+[33m480a530[m FINAL: remove probability block + enable real trading
+[33m1000725[m FINAL PATCH: enable trading + dual entry logic + dashboard fix
+[33mec0a090[m FINAL: balanced trading fix + dashboard + real execution
+[33m473b464[m FINAL FIX: dashboard + trading activation + relaxed filters (no architecture change)
+[33mde4ee95[m final: restore UI + capital + full system + auto timing (no downgrade)
+[33m198396a[m upgrade: IST auto start 9:20 + auto square-off 2:45 (no logic change)
+[33m0c5e010[m FINAL: stable real bot (capital + UI + alpha + no downgrade)
+[33m22bc959[m final: full system restore + expanded universe + no downgrade
+[33mffe51c4[m fix: runtime activation + real capital + dashboard + start/kill
+[33mb9645ff[m final fix: restore login + dashboard + timing + alpha (no downgrade)
+[33mc44bf86[m alpha upgrade: regime filter (trend-only trading, no architecture change)
+[33m27d8d26[m fix: restore dashboard + timing + performance endpoint (no logic change)
+[33m158e968[m FINAL: full integrated system (all upgrades, no architecture change)
+[33mda7bec0[m fix: prevent crash due to missing modules (no logic change)
+[33md1de1b5[m final fix: restore full server with login + trading (no logic change)
+[33m9e4d67e[m fix: restore zerodha login routes (no logic change)
+[33m9ad7217[m upgrade 9: intraday drawdown guard (capital protection layer)
+[33m444f062[m upgrade 8: trade quality filter (final signal refinement)
+[33mb3f8e86[m upgrade 7: slippage guard fully integrated (final execution refinement)
+[33m3fd960c[m final integration: all upgrades wired correctly (no logic change)
+[33mae58dab[m upgrade 6: time-based exit (remove stagnant trades)
+[33m71d73ee[m upgrade 5: per-trade capital allocation (final polish)
+[33ma92c39f[m upgrade 4: per-symbol cooldown (prevent overtrading)
+[33mc31ffd6[m upgrade 3: execution confirmation + fill verification
+[33mf81273e[m upgrade 2: signal confirmation (reduce false trades)
+[33mbc51a8f[m upgrade 1: volatility normalized signal (adaptive threshold)
+[33m3477029[m auto start 09:20 IST + auto square-off 15:20 IST
+[33m6db7658[m portfolio capital (cash + holdings + pnl)
+[33m02b797f[m final capital fix
+[33mca48c54[m final fix: real capital sync + zerodha trace
+[33mecb4269[m fix: capital from positions (final)
+[33m41f4fe0[m fix: capital from positions (final)
+[33m1526532[m fix: capital sync + remove wrong config path
+[33mb1e387a[m fix: real capital sync from Zerodha
+[33m4a222d1[m real capital sync + auto square-off
+[33m33ee1aa[m fix: performance endpoint + runtime clarity
+[33mef0c47e[m fix: move config to root
+[33mf10d84f[m fix config path resolution
+[33m55ac46a[m fix risk module path
+[33mf8a36f8[m additive upgrades: noise filter + execution confirm + capital allocation + trailing exit + volatility gate
+[33mf60953d[m strict additive v2: volatility memory + execution verify + capital isolation + trailing memory + cost realism
+[33md52c9db[m additive upgrades: volatility scaling + execution confirm + capital allocation + trailing exit + cost realism
+[33m900b037[m full integration: unified strategy + risk + execution + backtest alignment
+[33m8e21ba0[m v9 integrated system: unified strategy + risk + execution + backtest parity
+[33m82c0de4[m Added production-grade backtest engine
+[33mffe3efa[m add backtesting engine (no removal)
+[33m4ae576e[m data science quant platform (feature + scoring + adaptive weights)
+[33m2673ea5[m quant research platform (final layer, no removal)
+[33m5363fc0[m research + adaptive engine (no removal)
+[33me429fc9[m quant research layer (zscore + stats) no removal
+[33me878f70[m final precision upgrade (regime + trailing + correlation)
+[33m800313a[m capital + feedback layer upgrade (no removal)
+[33m1b401e0[m institutional upgrade - no removal
+[33m2bc37fd[m portfolio + multi-strategy upgrade
+[33m1ec5523[m portfolio + multi-strategy upgrade
+[33mf482fd8[m FINAL 8.5 COMPLETE
+[33m6ae5392[m FINAL 8.5 BOT - one shot
+[33m849683c[m FINAL COMPLETE BOT
+[33mbf068ec[m IST fix final
+[33m7118308[m add start kill buttons
+[33m9324fb3[m add trading logic safely
+[33md369643[m fix login + routes
+[33m4f08171[m fix UI path
+[33mc941d6f[m final structured backend
+[33mec6dbe2[m FINAL 9.2 SYSTEM
+[33mf4997d0[m INSTITUTIONAL SYSTEM
+[33ma6a78e9[m FINAL 9 SYSTEM
+[33m4e30ef6[m FINAL 8.5 SYSTEM
+[33m66cbc19[m FINAL VISIBILITY SYSTEM
+[33m3e46ebc[m TRUE 9 FINAL CLEAN
+[33m5a7ca89[m final complete
+[33m1d7fa4c[m add performance tracker
+[33m7f169e7[m final merge
+[33m88b5d4d[m multi stock upgrade
+[33m7e30691[m 8.5 gap closed
+[33m29ac993[m execution upgrade 8.5
+[33m6bcc91f[m 8.5 upgrade
+[33m8974111[m final fix
+[33mc9afdf4[m full upgrade
+[33mc109ae0[m real trading upgrade
+[33me39f88d[m final real fix
+[33me418978[m force clean deploy
+[33m551c293[m real fix
+[33mdb59403[m fix railway port
+[33m77a8563[m final build
+[33mdf742bb[m FINAL 7.5 SYSTEM
+[33mc4a840b[m clean working base
+[33m61c63ac[m retry deploy
+[33md82d0e2[m REAL FIX APPLIED
+[33mdf99a01[m 7.5 FINAL SYSTEM
+[33maa27cd1[m INTELLIGENCE VERSION
+[33m865ae32[m 7/10 SYSTEM FINAL
+[33me6c2244[m FINAL COMPLETE SYSTEM
+[33m567b79f[m PATCH ULTIMATE AI FIX
+[33m8adb33c[m PRO AI SYSTEM
+[33m867f12b[m FULL AUTO SYSTEM
+[33m9f15a30[m FINAL CAPITAL FIX WORKING
+[33mbfdcb3e[m FINAL REAL FIX
+[33m4bb577d[m final capital fix
+[33mede5289[m CLEAN REAL MODE RESET
+[33m946eeef[m AGGRESSIVE FINAL SYSTEM
+[33mdf52da2[m fix kite version error
+[33m7c8e02c[m clean build fix
+[33m282046f[m start kill system
+[33m27a1fd5[m fix dashboard
+[33mfbf82ed[m UI FIX FINAL
+[33m9935ea7[m FINAL REAL UI BOT
+[33ma005266[m PRO trader mode
+[33m2515912[m clean live bot
+[33me0b781b[m final real capital fix
+[33mf77582d[m ULTRA strategy upgrade
+[33m95d0688[m redirect final fix
+[33m3b17baf[m remove node_modules
+[33m8e3ffd8[m remove node_modules
