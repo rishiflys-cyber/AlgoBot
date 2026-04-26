@@ -1,4 +1,4 @@
-// STEP 4: PORTFOLIO ALLOCATOR (NO DOWNGRADE)
+// STEP 5: DYNAMIC SL/TP (VOLATILITY-BASED) — NO DOWNGRADE
 
 require("dotenv").config();
 const express = require("express");
@@ -62,7 +62,7 @@ function detectRegime(prices){
  return "NORMAL";
 }
 
-// STEP 3 FUNCTIONS (kept)
+// STEP 3/4 FUNCTIONS (kept)
 function riskGate(price, qty){
  let exposure = activeTrades.reduce((a,t)=>a+(t.entry*t.qty),0);
  return (exposure + price*qty) <= capital*0.6;
@@ -75,21 +75,34 @@ function entryCheck(signal, price, hist){
  return true;
 }
 
-// 🔥 STEP 4 ADDITION — PORTFOLIO ALLOCATOR
 function portfolioAllocator(quality){
- if(quality >= 80) return 0.05;   // high conviction
- if(quality >= 70) return 0.035;  // medium
- return 0.02;                     // low
+ if(quality >= 80) return 0.05;
+ if(quality >= 70) return 0.035;
+ return 0.02;
 }
 
 function positionSize(price, quality){
  let allocPct = portfolioAllocator(quality);
-
- // reduce size if many active trades
  if(activeTrades.length >= 3) allocPct *= 0.7;
  if(activeTrades.length >= 4) allocPct *= 0.5;
-
  return Math.max(1, Math.floor((capital * allocPct) / price));
+}
+
+// 🔥 STEP 5 ADDITIONS — VOLATILITY + DYNAMIC SL/TP
+function calcVol(prices){
+ if(prices.length < 2) return 0;
+ let diffs = [];
+ for(let i=1;i<prices.length;i++){
+  diffs.push(Math.abs(prices[i] - prices[i-1]));
+ }
+ return diffs.reduce((a,b)=>a+b,0) / diffs.length;
+}
+
+function getSLTP(entry, prices){
+ let vol = calcVol(prices);
+ let sl = Math.max(0.002, (vol / entry) * 1.5); // floor + volatility
+ let tp = sl * 1.5; // RR 1.5
+ return { sl, tp };
 }
 
 // STOCKS
@@ -166,6 +179,8 @@ setInterval(async()=>{
 
       if(!riskGate(price, qty)) continue;
 
+      let { sl, tp } = getSLTP(price, history[s]);
+
       await kite.placeOrder("regular",{
         exchange:"NSE",
         tradingsymbol:s,
@@ -175,9 +190,44 @@ setInterval(async()=>{
         order_type:"MARKET"
       });
 
-      activeTrades.push({symbol:s,entry:price,qty});
+      activeTrades.push({
+        symbol:s,
+        entry:price,
+        qty,
+        sl,
+        tp
+      });
     }
   }
+
+  // 🔥 EXIT ENGINE (NEW)
+  let remaining=[];
+  for(let t of activeTrades){
+    let cp = quotes["NSE:"+t.symbol]?.last_price;
+    if(!cp) continue;
+
+    let profit = cp - t.entry;
+
+    if(profit > t.entry * t.tp || profit < -t.entry * t.sl){
+      await kite.placeOrder("regular",{
+        exchange:"NSE",
+        tradingsymbol:t.symbol,
+        transaction_type:"SELL",
+        quantity:t.qty,
+        product:"MIS",
+        order_type:"MARKET"
+      });
+
+      closedTrades.push(profit * t.qty);
+    } else {
+      remaining.push(t);
+    }
+  }
+
+  activeTrades = remaining;
+
+  let realized = closedTrades.reduce((a,b)=>a+b,0);
+  pnl = realized;
 
  }catch(e){}
 },3000);
