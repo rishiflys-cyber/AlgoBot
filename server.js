@@ -1,4 +1,4 @@
-// STEP 7: PERFORMANCE ENGINE (NO DOWNGRADE)
+// STEP 8: WEALTH ENGINE (TAX + WITHDRAWAL) — NO DOWNGRADE
 
 require("dotenv").config();
 const express = require("express");
@@ -16,34 +16,29 @@ let history={}, volumeHistory={}, scanOutput=[];
 let indexHistory=[];
 let lossTracker={};
 
-// 🔥 PERFORMANCE ENGINE
-let perfStats = {
- totalTrades:0,
- wins:0,
- losses:0,
- totalWin:0,
- totalLoss:0
+// 🔥 PERFORMANCE
+let perfStats={totalTrades:0,wins:0,losses:0,totalWin:0,totalLoss:0};
+
+// 🔥 STEP 8 — WEALTH ENGINE
+let wealthConfig = {
+ taxRate: 0.30,
+ withdrawRate: 0.20
 };
 
-function updatePerformance(pnlTrade){
- perfStats.totalTrades++;
- if(pnlTrade > 0){
-   perfStats.wins++;
-   perfStats.totalWin += pnlTrade;
- } else {
-   perfStats.losses++;
-   perfStats.totalLoss += pnlTrade;
- }
-}
+let wealthStats = {
+ totalProfit:0,
+ taxReserve:0,
+ withdrawable:0,
+ reinvestable:0
+};
 
-function getMetrics(){
- let winRate = perfStats.totalTrades ? (perfStats.wins / perfStats.totalTrades) : 0;
- let avgWin = perfStats.wins ? (perfStats.totalWin / perfStats.wins) : 0;
- let avgLoss = perfStats.losses ? Math.abs(perfStats.totalLoss / perfStats.losses) : 0;
+function updateWealth(totalPnl){
+ if(totalPnl <= 0) return;
 
- let expectancy = (winRate * avgWin) - ((1 - winRate) * avgLoss);
-
- return { winRate, avgWin, avgLoss, expectancy };
+ wealthStats.totalProfit = totalPnl;
+ wealthStats.taxReserve = totalPnl * wealthConfig.taxRate;
+ wealthStats.withdrawable = totalPnl * wealthConfig.withdrawRate;
+ wealthStats.reinvestable = totalPnl - wealthStats.taxReserve - wealthStats.withdrawable;
 }
 
 // LOGIN
@@ -120,37 +115,49 @@ function positionSize(price, quality){
 
 function calcVol(prices){
  if(prices.length < 2) return 0;
- let diffs = [];
+ let diffs=[];
  for(let i=1;i<prices.length;i++){
-  diffs.push(Math.abs(prices[i] - prices[i-1]));
+  diffs.push(Math.abs(prices[i]-prices[i-1]));
  }
- return diffs.reduce((a,b)=>a+b,0) / diffs.length;
+ return diffs.reduce((a,b)=>a+b,0)/diffs.length;
 }
 
 function getSLTP(entry, prices){
  let vol = calcVol(prices);
- let sl = Math.max(0.002, (vol / entry) * 1.5);
- let tp = sl * 1.5;
- return { sl, tp };
+ let sl = Math.max(0.002,(vol/entry)*1.5);
+ let tp = sl*1.5;
+ return {sl,tp};
 }
 
 function checkCooldown(symbol){
- let data = lossTracker[symbol];
- if(!data) return false;
- if(data.lossCount < 2) return false;
- let minutesPassed = (Date.now() - data.lastLossTime) / 60000;
- return minutesPassed < 10;
+ let d=lossTracker[symbol];
+ if(!d) return false;
+ if(d.lossCount<2) return false;
+ return (Date.now()-d.lastLossTime)/60000 < 10;
 }
 
 function updateLoss(symbol, profit){
  if(!lossTracker[symbol]) lossTracker[symbol]={lossCount:0,lastLossTime:0};
-
- if(profit < 0){
+ if(profit<0){
   lossTracker[symbol].lossCount++;
-  lossTracker[symbol].lastLossTime = Date.now();
+  lossTracker[symbol].lastLossTime=Date.now();
  } else {
-  lossTracker[symbol] = {lossCount:0,lastLossTime:0};
+  lossTracker[symbol]={lossCount:0,lastLossTime:0};
  }
+}
+
+function updatePerformance(p){
+ perfStats.totalTrades++;
+ if(p>0){ perfStats.wins++; perfStats.totalWin+=p; }
+ else{ perfStats.losses++; perfStats.totalLoss+=p; }
+}
+
+function getMetrics(){
+ let wr = perfStats.totalTrades ? perfStats.wins/perfStats.totalTrades : 0;
+ let avgW = perfStats.wins ? perfStats.totalWin/perfStats.wins : 0;
+ let avgL = perfStats.losses ? Math.abs(perfStats.totalLoss/perfStats.losses) : 0;
+ let exp = (wr*avgW) - ((1-wr)*avgL);
+ return {winRate:wr,avgWin:avgW,avgLoss:avgL,expectancy:exp};
 }
 
 // STOCKS
@@ -211,7 +218,7 @@ setInterval(async()=>{
       signal="BUY";
     }
 
-    scanOutput.push({symbol:s,price,probability:pr,regime,quality,signal});
+    scanOutput.push({symbol:s,price,quality,signal});
 
     if(signal && !activeTrades.find(t=>t.symbol===s)){
 
@@ -221,7 +228,7 @@ setInterval(async()=>{
 
       if(!riskGate(price, qty)) continue;
 
-      let { sl, tp } = getSLTP(price, history[s]);
+      let {sl,tp}=getSLTP(price,history[s]);
 
       await kite.placeOrder("regular",{
         exchange:"NSE",
@@ -243,7 +250,7 @@ setInterval(async()=>{
 
     let profit = cp - t.entry;
 
-    if(profit > t.entry * t.tp || profit < -t.entry * t.sl){
+    if(profit > t.entry*t.tp || profit < -t.entry*t.sl){
       await kite.placeOrder("regular",{
         exchange:"NSE",
         tradingsymbol:t.symbol,
@@ -253,19 +260,22 @@ setInterval(async()=>{
         order_type:"MARKET"
       });
 
-      let pnlTrade = profit * t.qty;
+      let pnlTrade = profit*t.qty;
       closedTrades.push(pnlTrade);
 
-      updateLoss(t.symbol, pnlTrade);
-      updatePerformance(pnlTrade); // 🔥 NEW
+      updateLoss(t.symbol,pnlTrade);
+      updatePerformance(pnlTrade);
 
     } else {
       remaining.push(t);
     }
   }
 
-  activeTrades = remaining;
+  activeTrades=remaining;
   pnl = closedTrades.reduce((a,b)=>a+b,0);
+
+  // 🔥 WEALTH UPDATE
+  updateWealth(pnl);
 
  }catch(e){}
 },3000);
@@ -275,10 +285,11 @@ app.get("/performance",(req,res)=>{
  res.json({
   capital,
   pnl,
+  performance:getMetrics(),
+  wealth:wealthStats,
   activeTrades,
   closedTrades,
-  scan:scanOutput,
-  performance:getMetrics() // 🔥 NEW
+  scan:scanOutput
  });
 });
 
