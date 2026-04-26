@@ -6,20 +6,17 @@ const KiteConnect = require("kiteconnect").KiteConnect;
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const LIVE_TRADING = process.env.LIVE_TRADING === 'true';
-
 let kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
 let accessToken = process.env.ACCESS_TOKEN || null;
 
 if (accessToken) kite.setAccessToken(accessToken);
 
-// ===== STATE =====
-let strategies = [];
-let results = [];
-let activeTrades = [];
+// STATE
 let capital = 0;
+let scanOutput = [];
+let priceHistory = {};
 
-// ===== LOGIN =====
+// LOGIN
 app.get('/login', (req, res) => res.redirect(kite.getLoginURL()));
 
 app.get('/redirect', async (req, res) => {
@@ -29,92 +26,85 @@ app.get('/redirect', async (req, res) => {
   res.send("Login success");
 });
 
-// ===== CAPITAL =====
+// CAPITAL
 async function updateCapital() {
   if (!accessToken) return;
   const m = await kite.getMargins();
   capital = m?.equity?.available?.cash || m?.equity?.net || capital;
 }
 
-// ===== STRATEGY GENERATION =====
-function generateStrategy() {
-  return {
-    id: Date.now(),
-    threshold: 60 + Math.random() * 20
-  };
+// REAL ALPHA LOGIC
+function computeMomentum(hist) {
+  let up = 0;
+  for (let i=1;i<hist.length;i++){
+    if (hist[i] > hist[i-1]) up++;
+  }
+  return hist.length ? up / hist.length : 0.5;
 }
 
-// ===== BACKTEST =====
-function evaluateStrategy(strategy) {
-  let score = Math.random() * 100;
-  return score;
+function computeVolatility(hist) {
+  let changes = [];
+  for (let i=1;i<hist.length;i++){
+    changes.push(Math.abs(hist[i]-hist[i-1]));
+  }
+  return changes.length ? changes.reduce((a,b)=>a+b,0)/changes.length : 0;
 }
 
-// ===== ORDER =====
-async function placeOrder(symbol, qty) {
-  if (!LIVE_TRADING) return;
-
-  const [exchange, tradingsymbol] = symbol.split(":");
-
-  await kite.placeOrder("regular", {
-    exchange,
-    tradingsymbol,
-    transaction_type: "BUY",
-    quantity: qty,
-    product: "MIS",
-    order_type: "MARKET"
-  });
+function alphaSignal({momentum, breakout, volatility}) {
+  if (momentum > 0.6 && breakout > 1.5 && volatility > 0) return "BUY";
+  if (momentum < 0.4 && breakout > 1.5 && volatility > 0) return "SELL";
+  return null;
 }
 
-// ===== MAIN LOOP =====
+// LOOP
 setInterval(async () => {
   if (!accessToken) return;
 
   await updateCapital();
 
-  const strat = generateStrategy();
-  const score = evaluateStrategy(strat);
+  const symbols = ["NSE:RELIANCE","NSE:TCS","NSE:INFY"];
+  const quotes = await kite.getQuote(symbols);
 
-  strategies.push(strat);
-  results.push({ ...strat, score });
+  scanOutput = [];
 
-  results = results.sort((a,b)=>b.score-a.score).slice(0,5);
+  for (const sym of symbols) {
+    const q = quotes[sym];
+    if (!q) continue;
 
-  const best = results[0];
-  if (!best) return;
+    const price = q.last_price;
+    const volume = q.volume || 0;
+    const avgVol = q.average_volume || 1;
 
-  const symbol = "NSE:RELIANCE";
-  const price = 1000; // placeholder
-  const qty = Math.max(1, Math.floor((capital * 0.02) / price));
+    if (!priceHistory[sym]) priceHistory[sym] = [];
+    priceHistory[sym].push(price);
+    if (priceHistory[sym].length > 50) priceHistory[sym].shift();
 
-  if (best.score > best.threshold && activeTrades.length < 3) {
-    await placeOrder(symbol, qty);
+    const hist = priceHistory[sym];
 
-    activeTrades.push({
-      symbol,
-      qty,
-      strategy: best.id
+    const momentum = computeMomentum(hist);
+    const volatility = computeVolatility(hist);
+    const breakout = volume / avgVol;
+
+    const signal = alphaSignal({momentum, breakout, volatility});
+
+    scanOutput.push({
+      symbol: sym,
+      price,
+      momentum,
+      volatility,
+      breakout,
+      signal
     });
   }
 
-}, 4000);
+}, 3000);
 
-// ===== ROUTES =====
+// ROUTES
 app.get('/', (req, res) => {
   res.json({
     capital,
-    topStrategy: results[0],
-    activeTrades
+    scanOutput
   });
 });
 
-app.get('/performance', (req, res) => {
-  res.json({
-    strategiesTested: strategies.length,
-    bestScore: results[0]?.score || 0,
-    trades: activeTrades.length,
-    time: new Date().toISOString()
-  });
-});
-
-app.listen(PORT, () => console.log("Alpha Live Running"));
+app.listen(PORT, () => console.log("Real Alpha Engine Running"));
