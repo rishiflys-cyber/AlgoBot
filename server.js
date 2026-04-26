@@ -6,97 +6,67 @@ const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ===== LOAD DATA =====
-function loadCSV(path) {
-  const data = fs.readFileSync(path, 'utf-8').split('\n').slice(1);
-  return data.map(row => {
-    const [date, open, high, low, close, volume] = row.split(',');
-    return {
-      date,
-      open: +open,
-      high: +high,
-      low: +low,
-      close: +close,
-      volume: +volume
-    };
-  }).filter(d => !isNaN(d.close));
+// ===== STATE =====
+let strategies = [
+  { name: "momentum", pnl: 0, active: true },
+  { name: "volume", pnl: 0, active: true },
+  { name: "volatility", pnl: 0, active: true }
+];
+
+let capitalAllocation = {};
+
+// ===== SIMULATE PERFORMANCE UPDATE =====
+function updatePerformance() {
+  strategies = strategies.map(s => {
+    const change = (Math.random() - 0.5) * 100;
+    return { ...s, pnl: s.pnl + change };
+  });
 }
 
-// ===== STRATEGIES =====
-function momentum(prev, curr) { return curr.close > prev.close ? 1 : 0; }
-function volume(prev, curr) { return curr.volume > prev.volume * 1.2 ? 1 : 0; }
-function volatility(prev, curr) { return (curr.high - curr.low) > (prev.high - prev.low) ? 1 : 0; }
+// ===== ROTATION LOGIC =====
+function rotateStrategies() {
+  // deactivate worst performer
+  const sorted = [...strategies].sort((a,b)=>b.pnl-a.pnl);
 
-// ===== RUN STRATEGY =====
-function runStrategy(data, type) {
-  let pnl = 0;
-  let trades = [];
-
-  for (let i = 1; i < data.length; i++) {
-    const prev = data[i-1];
-    const curr = data[i];
-
-    let signal = 0;
-    if (type === "momentum") signal = momentum(prev, curr);
-    if (type === "volume") signal = volume(prev, curr);
-    if (type === "volatility") signal = volatility(prev, curr);
-
-    if (signal) {
-      const tradePnl = curr.close - prev.close;
-      pnl += tradePnl;
-      trades.push(tradePnl);
-    }
-  }
-
-  const wins = trades.filter(t => t > 0).length;
-
-  return {
-    pnl,
-    winRate: trades.length ? wins / trades.length : 0,
-    trades: trades.length
-  };
-}
-
-// ===== CAPITAL ALLOCATION =====
-function allocateCapital(results) {
-  const totalScore = results.reduce((a,b)=>a + Math.max(b.pnl,0), 0) || 1;
-
-  return results.map(r => ({
-    strategy: r.name,
-    weight: Math.max(r.pnl,0) / totalScore
+  strategies = strategies.map(s => ({
+    ...s,
+    active: sorted.indexOf(s) < 2 // keep top 2 active
   }));
 }
 
-// ===== RUN =====
-let output = {};
-try {
-  const data = loadCSV('./data.csv');
+// ===== CAPITAL REALLOCATION =====
+function rebalanceCapital() {
+  const active = strategies.filter(s => s.active);
+  const total = active.reduce((a,b)=>a + Math.max(b.pnl,0), 0) || 1;
 
-  const strategies = [
-    { name: "momentum", res: runStrategy(data, "momentum") },
-    { name: "volume", res: runStrategy(data, "volume") },
-    { name: "volatility", res: runStrategy(data, "volatility") }
-  ];
+  capitalAllocation = {};
 
-  const enriched = strategies.map(s => ({
-    name: s.name,
-    ...s.res
-  }));
-
-  const allocation = allocateCapital(enriched);
-
-  output = {
-    strategies: enriched,
-    allocation
-  };
-
-} catch (e) {
-  console.log("Upload data.csv");
+  active.forEach(s => {
+    capitalAllocation[s.name] = Math.max(s.pnl,0) / total;
+  });
 }
+
+// ===== MAIN LOOP =====
+setInterval(() => {
+  updatePerformance();
+  rotateStrategies();
+  rebalanceCapital();
+}, 3000);
 
 // ===== ROUTES =====
 app.get('/', (req, res) => {
-  res.json(output);
+  res.json({
+    strategies,
+    capitalAllocation
+  });
 });
 
-app.listen(PORT, () => console.log("Portfolio Optimizer Running"));
+app.get('/performance', (req, res) => {
+  res.json({
+    activeStrategies: strategies.filter(s=>s.active).map(s=>s.name),
+    allocation: capitalAllocation,
+    time: new Date().toISOString()
+  });
+});
+
+app.listen(PORT, () => console.log("Rebalancer Running"));

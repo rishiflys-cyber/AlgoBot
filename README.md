@@ -1,6 +1,7 @@
 
-PORTFOLIO OF STRATEGIES + CAPITAL ALLOCATION OPTIMIZER
+LIVE PORTFOLIO REBALANCING + STRATEGY ROTATION
 
-- Runs multiple strategies
-- Evaluates PnL + win rate
-- Allocates capital dynamically based on performance
+- Automatically disables worst strategies
+- Keeps top performers active
+- Dynamically reallocates capital
+- Runs continuous rotation loop
