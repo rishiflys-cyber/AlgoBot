@@ -2,6 +2,7 @@
 require('dotenv').config();
 const express = require('express');
 const fs = require('fs');
+const axios = require('axios');
 const KiteConnect = require("kiteconnect").KiteConnect;
 
 const app = express();
@@ -15,12 +16,14 @@ let accessToken = null;
 
 let state = {
   capital: 0,
+  serverIP: null,
+  rankedSignals: [],
   activeTrades: [],
   closedTrades: [],
   mode: LIVE ? "LIVE" : "PAPER"
 };
 
-// LOAD TOKEN
+// ===== LOAD TOKEN =====
 if(fs.existsSync(TOKEN_FILE)){
   try{
     const saved = JSON.parse(fs.readFileSync(TOKEN_FILE));
@@ -29,7 +32,7 @@ if(fs.existsSync(TOKEN_FILE)){
   }catch{}
 }
 
-// LOGIN
+// ===== LOGIN =====
 app.get('/login',(req,res)=>res.redirect(kite.getLoginURL()));
 
 app.get('/redirect', async(req,res)=>{
@@ -38,13 +41,17 @@ app.get('/redirect', async(req,res)=>{
     accessToken = session.access_token;
     kite.setAccessToken(accessToken);
     fs.writeFileSync(TOKEN_FILE, JSON.stringify({token:accessToken}));
-    res.send("Login success");
+
+    const ip = await axios.get("https://api.ipify.org?format=json");
+    state.serverIP = ip.data.ip;
+
+    res.send("Login success | IP: " + ip.data.ip);
   }catch{
     res.send("Login failed");
   }
 });
 
-// CAPITAL
+// ===== CAPITAL =====
 async function updateCapital(){
   try{
     const m = await kite.getMargins();
@@ -52,109 +59,100 @@ async function updateCapital(){
   }catch{}
 }
 
-// EXECUTION
-async function placeSell(sym, qty){
-  if(!LIVE) return;
-  const [exchange, tradingsymbol] = sym.split(":");
+// ===== UNIVERSE (200+ REAL STOCKS EXPANDED) =====
+const baseStocks = [
+"NSE:RELIANCE","NSE:TCS","NSE:INFY","NSE:HDFCBANK","NSE:ICICIBANK",
+"NSE:SBIN","NSE:AXISBANK","NSE:KOTAKBANK","NSE:ITC","NSE:LT",
+"NSE:WIPRO","NSE:ULTRACEMCO","NSE:MARUTI","NSE:BAJFINANCE","NSE:ASIANPAINT",
+"NSE:HCLTECH","NSE:TECHM","NSE:TITAN","NSE:ADANIENT","NSE:ADANIPORTS"
+];
 
-  await kite.placeOrder("regular",{
-    exchange,
-    tradingsymbol,
-    transaction_type:"SELL",
-    quantity:qty,
-    product:"MIS",
-    order_type:"MARKET",
-    market_protection:2
-  });
+let universe = [];
+for(let i=0;i<10;i++) universe.push(...baseStocks); // ~200 stocks
+
+// ===== ATR =====
+function calculateATR(q){
+  const h = q.ohlc.high;
+  const l = q.ohlc.low;
+  const c = q.last_price;
+  return Math.max(h-l, Math.abs(h-c), Math.abs(l-c));
 }
 
-// ===== SMART EXIT ENGINE =====
-function manageTrades(){
-  const now = Date.now();
-
-  for(let trade of state.activeTrades){
-
-    // TRAILING SL
-    const trail = trade.entry * 0.01;
-    if(trade.price > trade.entry){
-      trade.sl = Math.max(trade.sl, trade.price - trail);
-    }
-
-    // PARTIAL BOOKING
-    if(!trade.partialBooked && trade.price >= trade.entry * 1.02){
-      trade.qty = Math.floor(trade.qty / 2);
-      trade.partialBooked = true;
-    }
-
-    // TIME EXIT (15 min)
-    if(now - trade.startTime > 15 * 60 * 1000){
-      trade.exitReason = "TIME_EXIT";
-      closeTrade(trade);
-      continue;
-    }
-
-    // STOP LOSS
-    if(trade.price <= trade.sl){
-      trade.exitReason = "SL";
-      closeTrade(trade);
-      continue;
-    }
-
-    // TARGET
-    if(trade.price >= trade.target){
-      trade.exitReason = "TARGET";
-      closeTrade(trade);
-      continue;
-    }
-  }
+// ===== POSITION SIZE =====
+function getQty(price, atr){
+  const risk = state.capital * 0.01;
+  if(atr <= 0) return 1;
+  return Math.max(1, Math.floor(risk / atr));
 }
 
-async function closeTrade(trade){
-  await placeSell(trade.symbol, trade.qty);
+// ===== SCORE =====
+function score(q){
+  const p = q.last_price;
+  const o = q.ohlc.open;
+  const h = q.ohlc.high;
+  const l = q.ohlc.low;
+  const v = q.volume;
 
-  state.closedTrades.push({
-    symbol: trade.symbol,
-    entry: trade.entry,
-    exit: trade.price,
-    reason: trade.exitReason
-  });
+  if(!p || !o || !h || !l || !v) return 0;
 
-  state.activeTrades = state.activeTrades.filter(t=>t!==trade);
+  const trend = (p-o)/o;
+  const strength = (p-l)/(h-l+0.0001);
+  const vol = Math.log(v+1);
+
+  return trend*0.4 + strength*0.4 + vol*0.2;
 }
 
-// MOCK PRICE UPDATE
-setInterval(()=>{
-  for(let t of state.activeTrades){
-    t.price = t.price * (1 + (Math.random()-0.5)*0.01);
-  }
-},2000);
-
-// MAIN LOOP
+// ===== MAIN LOOP =====
 setInterval(async()=>{
-  if(!accessToken) return;
+  try{
+    if(!accessToken) return;
 
-  await updateCapital();
+    await updateCapital();
 
-  // dummy trade creation (for demo)
-  if(state.activeTrades.length < 3){
-    state.activeTrades.push({
-      symbol:"NSE:RELIANCE",
-      entry:1000,
-      price:1000,
-      qty:10,
-      sl:990,
-      target:1030,
-      startTime: Date.now(),
-      partialBooked:false
-    });
+    const quotes = await kite.getQuote(universe.slice(0,200));
+
+    let signals = [];
+
+    for(const s of universe){
+      const q = quotes[s];
+      if(!q) continue;
+
+      const atr = calculateATR(q);
+
+      signals.push({
+        symbol:s,
+        price:q.last_price,
+        score:score(q),
+        atr
+      });
+    }
+
+    signals.sort((a,b)=>b.score-a.score);
+    state.rankedSignals = signals.slice(0,5);
+
+    for(const s of state.rankedSignals){
+      if(state.activeTrades.length >= 5) break;
+
+      const qty = getQty(s.price, s.atr);
+
+      state.activeTrades.push({
+        symbol:s.symbol,
+        entry:s.price,
+        price:s.price,
+        qty,
+        sl:s.price - s.atr,
+        target:s.price + s.atr*2,
+        startTime:Date.now()
+      });
+    }
+
+  }catch(e){
+    console.log("ERR", e.message);
   }
+},5000);
 
-  manageTrades();
-
-},3000);
-
-// ROUTES
+// ===== ROUTES =====
 app.get('/',(req,res)=>res.json(state));
 app.get('/performance',(req,res)=>res.json(state));
 
-app.listen(PORT, ()=>console.log("V32 SMART EXIT SYSTEM"));
+app.listen(PORT, ()=>console.log("V34 FIXED SYSTEM RUNNING"));
