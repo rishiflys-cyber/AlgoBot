@@ -14,6 +14,19 @@ const TOKEN_FILE="access_token.json";
 let kite=new KiteConnect({api_key:process.env.KITE_API_KEY});
 let accessToken=null;
 
+let state={
+ capital:0,
+ pnl:0,
+ rankedSignals:[],
+ activeTrades:[],
+ closedTrades:[],
+ serverIP:null,
+ mode:LIVE?"LIVE":"PAPER"
+};
+
+let lastPrice={};
+
+// LOAD TOKEN
 if(fs.existsSync(TOKEN_FILE)){
  try{
   const saved=JSON.parse(fs.readFileSync(TOKEN_FILE));
@@ -21,17 +34,6 @@ if(fs.existsSync(TOKEN_FILE)){
   kite.setAccessToken(accessToken);
  }catch{}
 }
-
-let state={
- capital:0,
- pnl:0,
- rankedSignals:[],
- activeTrades:[],
- closedTrades:[],
- mode:LIVE?"LIVE":"PAPER"
-};
-
-let lastPrice={};
 
 // LOGIN
 app.get('/login',(req,res)=>res.redirect(kite.getLoginURL()));
@@ -42,24 +44,35 @@ app.get('/redirect',async(req,res)=>{
   accessToken=session.access_token;
   kite.setAccessToken(accessToken);
   fs.writeFileSync(TOKEN_FILE,JSON.stringify({token:accessToken}));
-  res.send("Login success");
- }catch{
+
+  const ip=await axios.get("https://api.ipify.org?format=json");
+  state.serverIP=ip.data.ip;
+
+  await updateCapital();
+
+  res.send("Login success | IP: "+state.serverIP+" | Capital: "+state.capital);
+ }catch(e){
   res.send("Login failed");
  }
 });
 
-// CAPITAL
+// CAPITAL FIX (CRITICAL)
 async function updateCapital(){
  try{
   const m=await kite.getMargins();
-  state.capital=m?.equity?.available?.cash||state.capital;
- }catch{}
+  state.capital =
+    m?.equity?.available?.cash ||
+    m?.equity?.net ||
+    m?.commodity?.available?.cash ||
+    state.capital;
+ }catch(e){
+  console.log("CAPITAL ERROR",e.message);
+ }
 }
 
 // SCORE ENGINE
 function scoreStock(q,prev){
  if(!prev||!q.ohlc) return 0;
-
  let score=0;
 
  if(q.last_price>prev) score+=1;
@@ -94,24 +107,19 @@ setInterval(async()=>{
    lastPrice[sym]=q.last_price;
 
    if(score>0){
-    signals.push({
-     symbol:sym,
-     score,
-     price:q.last_price
-    });
+    signals.push({symbol:sym,score,price:q.last_price});
    }
   }
 
-  // RANKING
   signals.sort((a,b)=>b.score-a.score);
+  const top=signals.slice(0,5);
 
-  // TAKE TOP 5 ONLY
-  const topSignals=signals.slice(0,5);
-  state.rankedSignals=topSignals;
+  state.rankedSignals=top;
 
-  // EXECUTE ONLY TOP SIGNALS
-  for(const s of topSignals){
+  for(const s of top){
    if(state.activeTrades.length>=5) break;
+
+   if(state.capital<=0) continue;
 
    const qty=Math.max(1,Math.floor((state.capital*0.02)/s.price));
 
@@ -138,34 +146,6 @@ setInterval(async()=>{
    });
   }
 
-  // EXIT
-  state.activeTrades=state.activeTrades.filter(tr=>{
-   const cp=lastPrice[tr.symbol];
-   if(!cp) return true;
-
-   if(cp>=tr.target||cp<=tr.sl){
-    const pnl=(cp-tr.entry)*tr.qty;
-    state.pnl+=pnl;
-
-    if(LIVE){
-     const [exchange,tradingsymbol]=tr.symbol.split(":");
-     kite.placeOrder("regular",{
-      exchange,
-      tradingsymbol,
-      transaction_type:"SELL",
-      quantity:tr.qty,
-      product:"MIS",
-      order_type:"MARKET",
-      market_protection:2
-     });
-    }
-
-    state.closedTrades.push({...tr,exit:cp,pnl});
-    return false;
-   }
-   return true;
-  });
-
  }catch(e){
   console.log("ERROR",e.message);
  }
@@ -175,4 +155,4 @@ setInterval(async()=>{
 app.get('/',(req,res)=>res.json(state));
 app.get('/performance',(req,res)=>res.json(state));
 
-app.listen(PORT,()=>console.log("V22 RANKED SYSTEM RUNNING"));
+app.listen(PORT,()=>console.log("V23 FIXED RUNNING"));
