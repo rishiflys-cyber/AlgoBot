@@ -1,4 +1,3 @@
-
 require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
@@ -7,6 +6,7 @@ const { KiteConnect } = require("kiteconnect");
 const app = express();
 const kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
 
+// ================= CORE STATE =================
 let access_token=null;
 let BOT_ACTIVE=false;
 
@@ -14,12 +14,14 @@ let capital=0;
 let pnl=0;
 let activeTrades=[];
 let closedTrades=[];
-let history={};
-let volumeHistory={};
-let scanOutput=[];
+let history={}, volumeHistory={}, scanOutput=[];
 let serverIP="UNKNOWN";
 
-// GET SERVER IP
+// ================= SAFETY =================
+process.on("uncaughtException", e=>console.error("UNCAUGHT:",e));
+process.on("unhandledRejection", e=>console.error("UNHANDLED:",e));
+
+// ================= HELPERS =================
 async function updateIP(){
  try{
   let res = await axios.get("https://api.ipify.org?format=json");
@@ -27,7 +29,6 @@ async function updateIP(){
  }catch(e){}
 }
 
-// CAPITAL
 async function updateCapital(){
  try{
   let m=await kite.getMargins();
@@ -35,7 +36,6 @@ async function updateCapital(){
  }catch(e){}
 }
 
-// PROBABILITY
 function prob(a){
  if(a.length<4) return 0;
  let up=0;
@@ -43,7 +43,7 @@ function prob(a){
  return up/a.length;
 }
 
-// INDEX TREND
+// ================= INDEX =================
 let indexHistory=[];
 function getIndexTrend(){
  if(indexHistory.length<5) return "UNKNOWN";
@@ -54,38 +54,90 @@ function getIndexTrend(){
  return up>=3?"UP":"DOWN";
 }
 
-// VOLUME BREAKOUT
+// ================= VOLUME =================
 function volumeBreakout(symbol, vol){
  if(!volumeHistory[symbol]) return false;
  let avg = volumeHistory[symbol].reduce((a,b)=>a+b,0)/volumeHistory[symbol].length;
  return vol > avg * 1.5;
 }
 
-// DYNAMIC CAPITAL ALLOCATION
-function dynamicQty(price, confidence){
- if(!capital) return 1;
- let risk = capital * (confidence >=0.6 ? 0.05 : 0.02);
- return Math.max(1, Math.floor(risk/price));
+// ================= ADVANCED ENGINE =================
+
+// Trade Quality
+function tradeQualityScore(pr, volBreak, agreement){
+ return Math.min(100,(pr*40)+(volBreak?30:10)+(agreement*10));
 }
 
-const STOCKS = ["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","ITC","LT","AXISBANK","KOTAKBANK"];
+// Auto Filter
+let autoConfig={minQuality:65,minProb:0.5};
+function passesAutoFilter(q,pr){
+ return q>=autoConfig.minQuality && pr>=autoConfig.minProb;
+}
 
-// DASHBOARD
+// Entry Check
+function entryCheck(signal, price, history, s){
+ let prev = history[s]?.[history[s].length-2];
+ if(signal==="BUY" && prev && price<prev) return false;
+ if(signal==="SELL" && prev && price>prev) return false;
+ return true;
+}
+
+// Risk Gate (simple safe)
+function riskGate(symbol, price, qty){
+ let exposure = activeTrades.reduce((a,t)=>a+(t.entry*t.qty),0);
+ return (exposure + price*qty) <= capital*0.6;
+}
+
+// Final Qty
+function finalQty(price, riskPct){
+ if(!capital) return 1;
+ return Math.max(1,Math.floor((capital*riskPct)/price));
+}
+
+// Smart Order
+async function smartOrderRoute(params){
+ await kite.placeOrder("regular",params);
+}
+
+// ================= EXECUTION ENGINE =================
+function shouldEnterTrade({agreement, pr, quality, signal, symbol, price, depth}){
+
+ if(!signal) return false;
+ if(!passesAutoFilter(quality, pr)) return false;
+ if(!entryCheck(signal, price, history, symbol)) return false;
+
+ let qty = finalQty(price, pr>=0.6?0.05:0.02);
+ if(!riskGate(symbol, price, qty)) return false;
+
+ return {signal, qty};
+}
+
+async function placeTrade(symbol, signal, qty, price){
+ await smartOrderRoute({
+  exchange:"NSE",
+  tradingsymbol:symbol,
+  transaction_type:signal,
+  quantity:qty,
+  product:"MIS",
+  order_type:"MARKET"
+ });
+
+ activeTrades.push({symbol, entry:price, type:signal, qty});
+}
+
+// ================= STOCKS =================
+const STOCKS=["RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK","SBIN","ITC","LT","AXISBANK","KOTAKBANK"];
+
+// ================= DASHBOARD =================
 app.get("/",(req,res)=>{
- res.send(`
- <h2>FINAL MULTI-STRATEGY SYSTEM</h2>
- <button onclick="location.href='/login'">Login</button>
- <button onclick="fetch('/start')">Start</button>
- <button onclick="fetch('/kill')">Kill</button>
- <pre id="data"></pre>
+ res.send(`<h2>FINAL ENGINE ACTIVE</h2><pre id="d"></pre>
  <script>
  setInterval(async()=>{
   let r=await fetch('/performance');
   let d=await r.json();
-  document.getElementById('data').innerText=JSON.stringify(d,null,2);
+  document.getElementById('d').innerText=JSON.stringify(d,null,2);
  },2000);
- </script>
- `);
+ </script>`);
 });
 
 app.get("/login",(req,res)=>res.redirect(kite.getLoginURL()));
@@ -96,18 +148,12 @@ app.get("/redirect",async(req,res)=>{
   access_token=s.access_token;
   kite.setAccessToken(access_token);
   BOT_ACTIVE=true;
-
   await updateIP();
-
-  res.send("Login Success. IP: "+serverIP);
- }catch(e){
-  res.send("Login failed");
- }
+  res.send("Login Success IP:"+serverIP);
+ }catch(e){res.send("Login failed");}
 });
 
-app.get("/start",(req,res)=>{BOT_ACTIVE=true;res.send("STARTED");});
-app.get("/kill",(req,res)=>{BOT_ACTIVE=false;res.send("STOPPED");});
-
+// ================= MAIN LOOP =================
 setInterval(async()=>{
  if(!access_token||!BOT_ACTIVE) return;
 
@@ -122,13 +168,10 @@ setInterval(async()=>{
   }
 
   let indexTrend=getIndexTrend();
-
   const quotes=await kite.getQuote(STOCKS.map(s=>"NSE:"+s));
-
   scanOutput=[];
 
   for(let s of STOCKS){
-
     let data=quotes["NSE:"+s];
     if(!data) continue;
 
@@ -146,53 +189,36 @@ setInterval(async()=>{
     let pr=prob(history[s]);
     let volBreak=volumeBreakout(s, vol);
 
-    // STRATEGIES
-    let momentum = pr>=0.5;
-    let volumeStr = volBreak;
-    let indexAlign = indexTrend==="UP" || indexTrend==="DOWN";
+    let momentum=pr>=0.5;
+    let indexAlign=indexTrend==="UP"||indexTrend==="DOWN";
 
-    let agreement = [momentum, volumeStr, indexAlign].filter(x=>x).length;
+    let agreement=[momentum,volBreak,indexAlign].filter(x=>x).length;
+
+    let quality=tradeQualityScore(pr,volBreak,agreement);
 
     let signal=null;
-    let reason="No edge";
-
     if(agreement>=2 && pr>=0.5){
-      signal = indexTrend==="UP"?"BUY":"SELL";
-      reason="Multi-strategy agreement";
+      signal=indexTrend==="UP"?"BUY":"SELL";
     }
 
     scanOutput.push({
-      symbol:s,
-      price,
-      probability:pr,
-      volume:vol,
-      volumeBreakout:volBreak,
-      indexTrend,
-      agreement,
-      signal,
-      reason
+      symbol:s,price,probability:pr,volume:vol,
+      volumeBreakout:volBreak,indexTrend,agreement,
+      tradeQualityScore:quality,signal
     });
 
-    if(signal && !activeTrades.find(t=>t.symbol===s) && activeTrades.length<5){
+    let result=shouldEnterTrade({
+      agreement,pr,quality,signal,
+      symbol:s,price,depth:data.depth
+    });
 
-      let qty=dynamicQty(price, pr);
-
-      await kite.placeOrder("regular",{
-        exchange:"NSE",
-        tradingsymbol:s,
-        transaction_type:signal,
-        quantity:qty,
-        product:"MIS",
-        order_type:"MARKET"
-      });
-
-      activeTrades.push({symbol:s,entry:price,type:signal,qty});
+    if(result && !activeTrades.find(t=>t.symbol===s) && activeTrades.length<5){
+      await placeTrade(s,result.signal,result.qty,price);
     }
   }
 
-  let unreal=0;
-  let remaining=[];
-
+  // EXIT LOGIC
+  let unreal=0, remaining=[];
   for(let t of activeTrades){
     let cp=quotes["NSE:"+t.symbol]?.last_price;
     if(!cp) continue;
@@ -200,30 +226,30 @@ setInterval(async()=>{
     let profit=t.type==="BUY"?(cp-t.entry):(t.entry-cp);
 
     if(profit>t.entry*0.003 || profit<-t.entry*0.002){
-      await kite.placeOrder("regular",{
+      await smartOrderRoute({
         exchange:"NSE",
         tradingsymbol:t.symbol,
-        transaction_type: t.type==="BUY"?"SELL":"BUY",
+        transaction_type:t.type==="BUY"?"SELL":"BUY",
         quantity:t.qty,
         product:"MIS",
         order_type:"MARKET"
       });
 
       closedTrades.push(profit*t.qty);
-    } else {
+    }else{
       unreal+=profit*t.qty;
       remaining.push(t);
     }
   }
 
   activeTrades=remaining;
-
   let realized=closedTrades.reduce((a,b)=>a+b,0);
   pnl=realized+unreal;
 
  }catch(e){}
 },3000);
 
+// ================= PERFORMANCE =================
 app.get("/performance",(req,res)=>{
  res.json({
   botActive:BOT_ACTIVE,
@@ -238,1688 +264,3 @@ app.get("/performance",(req,res)=>{
 });
 
 app.listen(process.env.PORT||3000);
-
-
-// ================= FINAL INSTITUTIONAL BUILD (SAFE INTEGRATION) =================
-
-// SAFETY
-process.on("uncaughtException", e=>console.error("UNCAUGHT:",e));
-process.on("unhandledRejection", e=>console.error("UNHANDLED:",e));
-
-// STATE
-let priceHistory={}, volatilityMap={}, lossTracker={}, sectorExposure={}, mtfHistory={};
-let adaptiveConfig={minQuality:65,minProb:0.5};
-let stats={wins:0,losses:0,total:0};
-
-// IST TIME
-function ist(){return new Date(new Date().toLocaleString("en-US",{timeZone:"Asia/Kolkata"}));}
-function isTrading(){let t=ist();let m=t.getHours()*60+t.getMinutes();return m>=560&&m<=885;}
-function isSquare(){let t=ist();let m=t.getHours()*60+t.getMinutes();return m>=885;}
-
-// SAFE AVG
-function avg(a,f){return (!a||!a.length)?f:a.reduce((x,y)=>x+y,0)/a.length;}
-
-// MTF
-function updateMTF(s,p){
- if(!mtfHistory[s]) mtfHistory[s]={m1:[],m5:[]};
- mtfHistory[s].m1.push(p); if(mtfHistory[s].m1.length>20) mtfHistory[s].m1.shift();
- mtfHistory[s].m5.push(p); if(mtfHistory[s].m5.length>100) mtfHistory[s].m5.shift();
-}
-function trend(a){
- if(a.length<5) return "NA";
- let u=0; for(let i=1;i<a.length;i++) if(a[i]>a[i-1]) u++;
- return u>=a.length/2?"UP":"DOWN";
-}
-
-// SECTOR
-const sectorMap={RELIANCE:"ENERGY",TCS:"IT",INFY:"IT",HDFCBANK:"BANK",ICICIBANK:"BANK",SBIN:"BANK",ITC:"FMCG",LT:"INFRA",AXISBANK:"BANK",KOTAKBANK:"BANK"};
-
-// AI
-function updatePerf(p){
- stats.total++;
- if(p>0) stats.wins++; else stats.losses++;
- let wr=stats.wins/(stats.total||1);
- if(wr<0.5){adaptiveConfig.minQuality=Math.min(80,adaptiveConfig.minQuality+2);adaptiveConfig.minProb=Math.min(0.6,adaptiveConfig.minProb+0.02);}
- else if(wr>0.65){adaptiveConfig.minQuality=Math.max(60,adaptiveConfig.minQuality-1);adaptiveConfig.minProb=Math.max(0.5,adaptiveConfig.minProb-0.01);}
-}
-
-// ================= END FINAL BUILD =================
-
-
-// ================= FINAL EDGE OPTIMIZATION =================
-
-// SLIPPAGE CONTROL
-function getLimitPrice(price, type){
-  let buffer = price * 0.0005; // 0.05%
-  return type==="BUY" ? price + buffer : price - buffer;
-}
-
-// EXECUTION FILTER (SPREAD SIMULATION SAFE)
-function isSpreadHealthy(bid, ask){
-  if(!bid || !ask) return true;
-  return (ask - bid)/bid < 0.002; // <0.2%
-}
-
-// TRADE GAP CONTROL
-let lastTradeTime = {};
-function canTradeNow(symbol){
-  let now = Date.now();
-  if(!lastTradeTime[symbol]) return true;
-  return (now - lastTradeTime[symbol]) > 120000; // 2 min gap
-}
-
-// PORTFOLIO CAPITAL BALANCER
-function portfolioCap(qty, price){
-  let maxExposure = capital * 0.2; // 20% per trade max cap
-  let value = qty * price;
-  if(value > maxExposure){
-    return Math.floor(maxExposure / price);
-  }
-  return qty;
-}
-
-// PERFORMANCE LOGGING
-let tradeLog = [];
-function logTrade(symbol, pnl){
-  tradeLog.push({symbol, pnl, time: new Date()});
-  if(tradeLog.length > 100) tradeLog.shift();
-}
-
-// APPLY INTEGRATION NOTES:
-// 1. Before placing order:
-// if(!canTradeNow(s)) signal=null;
-
-// 2. After qty calc:
-// qty = portfolioCap(qty, price);
-
-// 3. Before order:
-// let limitPrice = getLimitPrice(price, signal);
-
-// 4. After trade close:
-// logTrade(t.symbol, profit*t.qty);
-// lastTradeTime[t.symbol] = Date.now();
-
-// ================= END EDGE =================
-
-
-// ================= DASHBOARD ANALYTICS + AUTO SCALING =================
-
-// PERFORMANCE METRICS
-let analytics = {
-  wins: 0,
-  losses: 0,
-  total: 0,
-  profit: 0,
-  loss: 0
-};
-
-function updateAnalytics(pnl){
-  analytics.total++;
-  if(pnl > 0){
-    analytics.wins++;
-    analytics.profit += pnl;
-  } else {
-    analytics.losses++;
-    analytics.loss += pnl;
-  }
-}
-
-function getAnalytics(){
-  let winRate = analytics.total ? (analytics.wins / analytics.total) : 0;
-  let avgWin = analytics.wins ? (analytics.profit / analytics.wins) : 0;
-  let avgLoss = analytics.losses ? (analytics.loss / analytics.losses) : 0;
-
-  return {
-    winRate,
-    avgWin,
-    avgLoss,
-    totalTrades: analytics.total
-  };
-}
-
-// AUTO CAPITAL SCALING
-function adaptiveRisk(){
-  let stats = getAnalytics();
-  let winRate = stats.winRate;
-
-  if(winRate > 0.65) return 0.05;
-  if(winRate > 0.55) return 0.04;
-  if(winRate > 0.5) return 0.03;
-  return 0.02;
-}
-
-// OVERRIDE POSITION SIZING (SAFE ADD)
-function scaledQty(price){
-  if(!capital) return 1;
-  let risk = capital * adaptiveRisk();
-  return Math.max(1, Math.floor(risk / price));
-}
-
-// ================= DASHBOARD EXTENSION =================
-// MODIFY /performance RESPONSE (add fields)
-
-const originalPerformance = app._router.stack.find(r => r.route && r.route.path === '/performance');
-
-if(originalPerformance){
-  app.get("/performance",(req,res)=>{
-    let stats = getAnalytics();
-    res.json({
-      botActive:BOT_ACTIVE,
-      capital,
-      pnl,
-      serverIP,
-      activeTradesCount:activeTrades.length,
-      scan:scanOutput,
-      activeTrades,
-      closedTrades,
-      analytics: stats
-    });
-  });
-}
-
-// ================= END UPGRADE =================
-
-
-// ================= SAFE TOP-3 + COMPLIANCE MODE + MARKET PROTECTION FIX =================
-
-// -------- COMPLIANCE MODE --------
-let AUTO_TRADING = false; // set true ONLY if allowed
-
-// -------- MARKET PROTECTION FIX --------
-// Zerodha rejects 0, so enforce minimum
-function safeMarketProtection(mp){
-  if(mp === undefined || mp <= 0) return 2; // minimum safe value
-  return mp;
-}
-
-// -------- TRADE REJECTION ENGINE --------
-function rejectTrade(s, price, history, volumeHistory, priceHistory){
-  try{
-    let priceChange = history[s]?.length > 1 
-      ? Math.abs(price - history[s][history[s].length - 2]) / price 
-      : 0;
-
-    let priceMovedTooFast = priceChange > 0.003;
-
-    let volArr = volumeHistory[s] || [];
-    let volSpike = volArr.length > 2 && volArr[volArr.length-1] > (2 * volArr[volArr.length - 2]);
-
-    let unstableMove = priceHistory[s] && priceHistory[s].length > 3 &&
-      Math.abs(price - priceHistory[s][priceHistory[s].length - 3]) / price > 0.004;
-
-    return priceMovedTooFast || volSpike || unstableMove;
-  }catch(e){
-    return true;
-  }
-}
-
-// -------- ENTRY PRECISION --------
-function entryCheck(signal, price, history, s){
-  let prevPrice = history[s]?.[history[s].length - 2];
-
-  if(signal === "BUY" && prevPrice && price < prevPrice) return false;
-  if(signal === "SELL" && prevPrice && price > prevPrice) return false;
-
-  return true;
-}
-
-// -------- DRAWDOWN ADAPTATION --------
-let peakCapital = 0;
-
-function getDrawdown(capital){
-  if(capital > peakCapital) peakCapital = capital;
-  return peakCapital > 0 ? (peakCapital - capital) / peakCapital : 0;
-}
-
-function adjustedRisk(baseRisk, capital){
-  let dd = getDrawdown(capital);
-
-  if(dd > 0.02) return baseRisk * 0.5;
-  if(dd > 0.01) return baseRisk * 0.75;
-
-  return baseRisk;
-}
-
-// ================= INTEGRATION NOTES =================
-// 1. BEFORE placing trade:
-// if(rejectTrade(s, price, history, volumeHistory, priceHistory)) signal=null;
-
-// 2. ENTRY FILTER:
-// if(!entryCheck(signal, price, history, s)) signal=null;
-
-// 3. POSITION SIZING:
-// let risk = adjustedRisk(pr >=0.6 ? 0.05 : 0.02, capital);
-
-// 4. COMPLIANCE:
-// if(!AUTO_TRADING) signal=null;
-
-// 5. ORDER:
-// market_protection: safeMarketProtection(0)
-
-// ================= END PATCH =================
-
-
-// ================= EQUITY CURVE + DRAWDOWN DASHBOARD =================
-
-// EQUITY TRACKING
-let equityHistory = [];
-let maxEquity = 0;
-let maxDrawdown = 0;
-
-function updateEquity(pnl){
-  let currentEquity = capital + pnl;
-
-  equityHistory.push({
-    time: new Date(),
-    equity: currentEquity
-  });
-
-  if(equityHistory.length > 500) equityHistory.shift();
-
-  // Track peak
-  if(currentEquity > maxEquity) maxEquity = currentEquity;
-
-  // Drawdown calc
-  let dd = maxEquity > 0 ? (maxEquity - currentEquity) / maxEquity : 0;
-  if(dd > maxDrawdown) maxDrawdown = dd;
-
-  return {currentEquity, dd};
-}
-
-// DASHBOARD EXTENSION (SAFE ADD)
-const originalPerfRoute = app._router.stack.find(r => r.route && r.route.path === '/performance');
-
-if(originalPerfRoute){
-  app.get("/performance",(req,res)=>{
-    let analyticsData = (typeof getAnalytics === "function") ? getAnalytics() : {};
-
-    let eq = updateEquity(pnl);
-
-    res.json({
-      botActive: BOT_ACTIVE,
-      capital,
-      pnl,
-      serverIP,
-      activeTradesCount: activeTrades.length,
-      scan: scanOutput,
-      activeTrades,
-      closedTrades,
-
-      // NEW DASHBOARD DATA
-      analytics: analyticsData,
-      equity: eq.currentEquity,
-      drawdown: eq.dd,
-      maxDrawdown,
-      equityHistory
-    });
-  });
-}
-
-// ================= END DASHBOARD =================
-
-
-// ================= EQUITY GRAPH UI + DRAWDOWN ALERT =================
-
-// ALERT THRESHOLD
-const DRAWDOWN_ALERT = 0.03; // 3%
-
-let alertTriggered = false;
-
-// MODIFY DASHBOARD UI (replace "/" route HTML)
-app.get("/",(req,res)=>{
- res.send(`
- <h2>FINAL MULTI-STRATEGY SYSTEM</h2>
- <button onclick="location.href='/login'">Login</button>
- <button onclick="fetch('/start')">Start</button>
- <button onclick="fetch('/kill')">Kill</button>
-
- <canvas id="equityChart" width="800" height="300"></canvas>
- <pre id="data"></pre>
-
- <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-
- <script>
- let chart;
-
- async function loadData(){
-  let r = await fetch('/performance');
-  let d = await r.json();
-
-  document.getElementById('data').innerText = JSON.stringify(d,null,2);
-
-  let labels = d.equityHistory.map(x=> new Date(x.time).toLocaleTimeString());
-  let values = d.equityHistory.map(x=> x.equity);
-
-  if(!chart){
-    const ctx = document.getElementById('equityChart').getContext('2d');
-    chart = new Chart(ctx,{
-      type:'line',
-      data:{
-        labels:labels,
-        datasets:[{
-          label:'Equity Curve',
-          data:values,
-          fill:false,
-          tension:0.1
-        }]
-      }
-    });
-  } else {
-    chart.data.labels = labels;
-    chart.data.datasets[0].data = values;
-    chart.update();
-  }
- }
-
- setInterval(loadData,2000);
- </script>
- `);
-});
-
-// DRAWDOWN ALERT (SERVER SIDE)
-function checkDrawdownAlert(drawdown){
-  if(drawdown > DRAWDOWN_ALERT && !alertTriggered){
-    console.log("⚠️ ALERT: Drawdown breached", drawdown);
-    alertTriggered = true;
-  }
-  if(drawdown < DRAWDOWN_ALERT){
-    alertTriggered = false;
-  }
-}
-
-// INTEGRATION NOTE:
-// call checkDrawdownAlert(eq.dd) inside performance update
-
-// ================= END UI + ALERT =================
-
-
-// ================= AUTO DISABLE + RECOVERY MODE =================
-
-// CONFIG
-const DD_HARD_STOP = 0.03;   // 3% stop trading
-const DD_RECOVERY = 0.015;   // resume below 1.5%
-
-let tradingDisabled = false;
-
-// MODIFY drawdown check
-function enhancedDrawdownControl(drawdown){
-  if(drawdown >= DD_HARD_STOP){
-    tradingDisabled = true;
-    console.log("🛑 TRADING DISABLED (Drawdown breach):", drawdown);
-  }
-
-  if(tradingDisabled && drawdown <= DD_RECOVERY){
-    tradingDisabled = false;
-    console.log("✅ RECOVERY MODE COMPLETE - Trading Resumed:", drawdown);
-  }
-}
-
-// INTEGRATION:
-// 1. After equity calculation:
-// enhancedDrawdownControl(eq.dd);
-
-// 2. Before placing trade:
-// if(tradingDisabled) signal = null;
-
-// ================= END AUTO CONTROL =================
-
-
-// ================= SHADOW SIMULATOR (SAFE, NON-INTERFERING) =================
-
-// Shadow state (completely separate)
-let shadowTrades = [];
-let shadowClosed = [];
-let shadowPnL = 0;
-
-// Simulate entry (NO real order)
-function shadowEnter(symbol, price, type, qty){
-  shadowTrades.push({
-    symbol,
-    entry: price,
-    type,
-    qty
-  });
-}
-
-// Simulate exit
-function shadowExit(trade, price){
-  let profit = trade.type==="BUY" ? (price - trade.entry) : (trade.entry - price);
-  let pnl = profit * trade.qty;
-
-  shadowClosed.push(pnl);
-  shadowPnL += pnl;
-}
-
-// Hook: AFTER signal generation (NON-BLOCKING)
-function shadowProcessSignal(symbol, price, signal, qty){
-  if(!signal) return;
-
-  // prevent duplicate shadow trades
-  if(shadowTrades.find(t=>t.symbol===symbol)) return;
-
-  shadowEnter(symbol, price, signal, qty);
-}
-
-// Hook: INSIDE activeTrades loop (mirror exit logic safely)
-function shadowMonitorExit(quotes){
-  let remaining = [];
-
-  for(let t of shadowTrades){
-    let cp = quotes["NSE:"+t.symbol]?.last_price;
-    if(!cp){
-      remaining.push(t);
-      continue;
-    }
-
-    let profit = t.type==="BUY" ? (cp - t.entry) : (t.entry - cp);
-
-    // same SL/TP logic (approx mirror)
-    if(profit > t.entry*0.003 || profit < -t.entry*0.002){
-      shadowExit(t, cp);
-    } else {
-      remaining.push(t);
-    }
-  }
-
-  shadowTrades = remaining;
-}
-
-// Extend dashboard safely
-const existingPerf = app._router.stack.find(r => r.route && r.route.path === '/performance');
-
-if(existingPerf){
-  app.get("/performance",(req,res)=>{
-    res.json({
-      botActive:BOT_ACTIVE,
-      capital,
-      pnl,
-      serverIP,
-      activeTradesCount:activeTrades.length,
-      scan:scanOutput,
-      activeTrades,
-      closedTrades,
-
-      // SHADOW DATA
-      shadowPnL,
-      shadowActive: shadowTrades.length,
-      shadowClosed
-    });
-  });
-}
-
-// ================= END SHADOW =================
-
-
-// ================= LIVE VS SHADOW COMPARISON + AUTO INSIGHTS =================
-
-// INSIGHT ENGINE
-let insights = {
-  divergence: 0,
-  betterSystem: "EQUAL",
-  executionIssue: false
-};
-
-function generateInsights(){
-  let real = pnl || 0;
-  let shadow = shadowPnL || 0;
-
-  insights.divergence = shadow - real;
-
-  if(shadow > real * 1.1){
-    insights.betterSystem = "SHADOW";
-    insights.executionIssue = true;
-  } else if(real > shadow * 1.1){
-    insights.betterSystem = "LIVE";
-    insights.executionIssue = false;
-  } else {
-    insights.betterSystem = "EQUAL";
-    insights.executionIssue = false;
-  }
-
-  return insights;
-}
-
-// EXTEND DASHBOARD SAFELY
-const perfRoute = app._router.stack.find(r => r.route && r.route.path === '/performance');
-
-if(perfRoute){
-  app.get("/performance",(req,res)=>{
-    let insightData = generateInsights();
-
-    res.json({
-      botActive:BOT_ACTIVE,
-      capital,
-      pnl,
-      serverIP,
-      activeTradesCount:activeTrades.length,
-      scan:scanOutput,
-      activeTrades,
-      closedTrades,
-
-      shadowPnL,
-      shadowActive: shadowTrades.length,
-      shadowClosed,
-
-      insights: insightData
-    });
-  });
-}
-
-// ================= END INSIGHTS =================
-
-
-// ================= SAFE AUTO-OPTIMIZATION ENGINE =================
-
-// bounded adaptive config (SAFE LIMITS)
-let autoConfig = {
-  minQuality: 65,
-  minProb: 0.5
-};
-
-function autoOptimize(){
-  try{
-    let real = pnl || 0;
-    let shadow = shadowPnL || 0;
-
-    // only act if enough trades
-    if(closedTrades.length < 10) return;
-
-    // divergence logic
-    let diff = shadow - real;
-
-    // SAFE bounded adjustments
-    if(diff > 0){ 
-      // shadow better → loosen slightly
-      autoConfig.minQuality = Math.max(60, autoConfig.minQuality - 1);
-      autoConfig.minProb = Math.max(0.5, autoConfig.minProb - 0.01);
-    } else if(diff < 0){
-      // live better → tighten slightly
-      autoConfig.minQuality = Math.min(80, autoConfig.minQuality + 1);
-      autoConfig.minProb = Math.min(0.6, autoConfig.minProb + 0.01);
-    }
-
-  }catch(e){
-    console.log("AutoOptimize Error:", e.message);
-  }
-}
-
-// APPLY (SAFE HOOK)
-// call autoOptimize() once every cycle (after pnl update)
-
-// MODIFY SIGNAL FILTER (SAFE ADDITIVE)
-// replace existing threshold checks with:
-function passesAutoFilter(tradeQualityScore, pr){
-  return (
-    tradeQualityScore >= autoConfig.minQuality &&
-    pr >= autoConfig.minProb
-  );
-}
-
-// DASHBOARD ADD
-const perfRoute2 = app._router.stack.find(r => r.route && r.route.path === '/performance');
-
-if(perfRoute2){
-  app.get("/performance",(req,res)=>{
-    let insightData = (typeof generateInsights==="function") ? generateInsights() : {};
-
-    res.json({
-      botActive:BOT_ACTIVE,
-      capital,
-      pnl,
-      serverIP,
-      activeTradesCount:activeTrades.length,
-      scan:scanOutput,
-      activeTrades,
-      closedTrades,
-      shadowPnL,
-      shadowActive: shadowTrades.length,
-      shadowClosed,
-      insights: insightData,
-      autoConfig
-    });
-  });
-}
-
-// ================= END AUTO OPTIMIZATION =================
-
-
-// ================= MULTI-STRATEGY PORTFOLIO ENGINE =================
-
-// Strategy registry
-let strategies = {
-  momentum: true,
-  meanReversion: true,
-  breakout: true
-};
-
-// Strategy performance tracking
-let strategyStats = {
-  momentum: { pnl: 0, trades: 0 },
-  meanReversion: { pnl: 0, trades: 0 },
-  breakout: { pnl: 0, trades: 0 }
-};
-
-// Strategy selection
-function runStrategies(s, price, history, volumeHistory){
-  let signals = [];
-
-  try{
-    // Momentum (existing logic reuse)
-    let pr = history[s]?.length > 3 ? (
-      history[s].filter((v,i,a)=> i>0 && v>a[i-1]).length / history[s].length
-    ) : 0;
-
-    if(strategies.momentum && pr >= 0.6){
-      signals.push({type:"BUY", strategy:"momentum"});
-    }
-
-    // Mean Reversion (simple)
-    let avg = history[s]?.reduce((a,b)=>a+b,0)/ (history[s]?.length||1);
-    if(strategies.meanReversion && avg && price < avg*0.995){
-      signals.push({type:"BUY", strategy:"meanReversion"});
-    }
-
-    // Breakout
-    let max = Math.max(...(history[s]||[price]));
-    if(strategies.breakout && price >= max){
-      signals.push({type:"BUY", strategy:"breakout"});
-    }
-
-  }catch(e){}
-
-  return signals;
-}
-
-// Strategy weighting (based on performance)
-function pickBestSignal(signals){
-  if(!signals.length) return null;
-
-  signals.sort((a,b)=>{
-    let pa = strategyStats[a.strategy]?.pnl || 0;
-    let pb = strategyStats[b.strategy]?.pnl || 0;
-    return pb - pa;
-  });
-
-  return signals[0];
-}
-
-// Update stats
-function updateStrategyStats(strategy, pnl){
-  if(!strategyStats[strategy]) return;
-  strategyStats[strategy].pnl += pnl;
-  strategyStats[strategy].trades += 1;
-}
-
-// Dashboard extension
-const perfRoute3 = app._router.stack.find(r => r.route && r.route.path === '/performance');
-
-if(perfRoute3){
-  app.get("/performance",(req,res)=>{
-    res.json({
-      botActive:BOT_ACTIVE,
-      capital,
-      pnl,
-      serverIP,
-      activeTradesCount:activeTrades.length,
-      scan:scanOutput,
-      activeTrades,
-      closedTrades,
-      shadowPnL,
-      shadowActive: shadowTrades.length,
-      shadowClosed,
-      strategyStats
-    });
-  });
-}
-
-// ================= END MULTI-STRATEGY =================
-
-
-// ================= STRATEGY ROTATION + CAPITAL ALLOCATION =================
-
-// Strategy capital weights
-let strategyAllocation = {
-  momentum: 0.34,
-  meanReversion: 0.33,
-  breakout: 0.33
-};
-
-// Normalize weights
-function normalizeAlloc(){
-  let total = Object.values(strategyAllocation).reduce((a,b)=>a+b,0);
-  if(total === 0) return;
-  for(let k in strategyAllocation){
-    strategyAllocation[k] = strategyAllocation[k] / total;
-  }
-}
-
-// Rotation logic (based on performance)
-function rotateCapital(){
-  try{
-    let totalPnL = Object.values(strategyStats).reduce((a,b)=>a + b.pnl,0);
-    if(totalPnL === 0) return;
-
-    for(let k in strategyStats){
-      let perf = strategyStats[k].pnl;
-
-      // proportional allocation (bounded)
-      let weight = perf / totalPnL;
-
-      // smooth adjustment
-      strategyAllocation[k] = Math.max(0.1, Math.min(0.6, weight));
-    }
-
-    normalizeAlloc();
-
-  }catch(e){
-    console.log("Rotation error:", e.message);
-  }
-}
-
-// Capital allocation per trade
-function getStrategyQty(price, strategy){
-  if(!capital) return 1;
-
-  let baseRisk = adaptiveRisk ? adaptiveRisk() : 0.02;
-  let alloc = strategyAllocation[strategy] || 0.33;
-
-  let risk = capital * baseRisk * alloc;
-  return Math.max(1, Math.floor(risk / price));
-}
-
-// Dashboard extension
-const perfRoute4 = app._router.stack.find(r => r.route && r.route.path === '/performance');
-
-if(perfRoute4){
-  app.get("/performance",(req,res)=>{
-    res.json({
-      botActive:BOT_ACTIVE,
-      capital,
-      pnl,
-      serverIP,
-      activeTradesCount:activeTrades.length,
-      scan:scanOutput,
-      activeTrades,
-      closedTrades,
-      shadowPnL,
-      shadowActive: shadowTrades.length,
-      shadowClosed,
-      strategyStats,
-      strategyAllocation
-    });
-  });
-}
-
-// ================= END STRATEGY ROTATION =================
-
-
-// ================= INSTITUTIONAL RISK OVERLAY (VaR + EXPOSURE CONTROL) =================
-
-// --- CONFIG ---
-const MAX_PORTFOLIO_EXPOSURE = 0.6;   // max 60% capital deployed
-const MAX_SYMBOL_EXPOSURE = 0.2;      // max 20% per symbol
-const VAR_CONFIDENCE = 0.95;
-
-// --- TRACK EXPOSURE ---
-function getCurrentExposure(){
-  let exposure = 0;
-  for(let t of activeTrades){
-    exposure += t.entry * t.qty;
-  }
-  return exposure;
-}
-
-// --- SYMBOL EXPOSURE CHECK ---
-function canTakeSymbolExposure(symbol, price, qty){
-  let current = activeTrades
-    .filter(t => t.symbol === symbol)
-    .reduce((a,b)=> a + (b.entry * b.qty), 0);
-
-  let newExposure = current + (price * qty);
-  return newExposure <= (capital * MAX_SYMBOL_EXPOSURE);
-}
-
-// --- PORTFOLIO EXPOSURE CHECK ---
-function canTakePortfolioExposure(price, qty){
-  let current = getCurrentExposure();
-  let newExposure = current + (price * qty);
-  return newExposure <= (capital * MAX_PORTFOLIO_EXPOSURE);
-}
-
-// --- SIMPLE VaR (rolling volatility based) ---
-let returnsHistory = [];
-
-function updateReturns(pnl){
-  if(!pnl) return;
-  returnsHistory.push(pnl);
-  if(returnsHistory.length > 100) returnsHistory.shift();
-}
-
-function calculateVaR(){
-  if(returnsHistory.length < 10) return 0;
-
-  let sorted = [...returnsHistory].sort((a,b)=>a-b);
-  let index = Math.floor((1 - VAR_CONFIDENCE) * sorted.length);
-  return Math.abs(sorted[index]);
-}
-
-// --- VaR LIMIT CHECK ---
-function withinVaRLimit(){
-  let varValue = calculateVaR();
-  return varValue < (capital * 0.02); // 2% VaR cap
-}
-
-// --- FINAL RISK GATE ---
-function riskGate(symbol, price, qty){
-  return (
-    canTakePortfolioExposure(price, qty) &&
-    canTakeSymbolExposure(symbol, price, qty) &&
-    withinVaRLimit()
-  );
-}
-
-// ================= DASHBOARD EXTENSION =================
-const perfRoute5 = app._router.stack.find(r => r.route && r.route.path === '/performance');
-
-if(perfRoute5){
-  app.get("/performance",(req,res)=>{
-    res.json({
-      botActive:BOT_ACTIVE,
-      capital,
-      pnl,
-      serverIP,
-      activeTradesCount:activeTrades.length,
-      scan:scanOutput,
-      activeTrades,
-      closedTrades,
-      shadowPnL,
-      strategyStats,
-      strategyAllocation,
-
-      // RISK METRICS
-      exposure: getCurrentExposure(),
-      var: calculateVaR()
-    });
-  });
-}
-
-// ================= END RISK OVERLAY =================
-
-
-// ================= BROKER EXECUTION OPTIMIZATION =================
-
-// --- LATENCY TRACKING ---
-let latencyStats = {
-  lastOrderTime: 0,
-  avgLatency: 0,
-  samples: []
-};
-
-function trackLatency(startTime){
-  let latency = Date.now() - startTime;
-  latencyStats.samples.push(latency);
-  if(latencyStats.samples.length > 50) latencyStats.samples.shift();
-
-  latencyStats.avgLatency = latencyStats.samples.reduce((a,b)=>a+b,0) / latencyStats.samples.length;
-}
-
-// --- ORDER SLICING ---
-function sliceOrder(qty){
-  if(qty <= 1) return [qty];
-
-  let slices = [];
-  let maxSlice = Math.ceil(qty / 3); // split into max 3 parts
-
-  let remaining = qty;
-
-  while(remaining > 0){
-    let part = Math.min(maxSlice, remaining);
-    slices.push(part);
-    remaining -= part;
-  }
-
-  return slices;
-}
-
-// --- SMART EXECUTION ---
-async function executeOrder(kite, orderParams){
-  try{
-    let start = Date.now();
-
-    let slices = sliceOrder(orderParams.quantity);
-
-    for(let q of slices){
-      let params = {
-        ...orderParams,
-        quantity: q
-      };
-
-      await kite.placeOrder("regular", params);
-
-      // slight delay to avoid burst
-      await new Promise(res => setTimeout(res, 150));
-    }
-
-    trackLatency(start);
-
-  }catch(e){
-    console.log("Execution error:", e.message);
-  }
-}
-
-// ================= DASHBOARD EXTENSION =================
-const perfRoute6 = app._router.stack.find(r => r.route && r.route.path === '/performance');
-
-if(perfRoute6){
-  app.get("/performance",(req,res)=>{
-    res.json({
-      botActive:BOT_ACTIVE,
-      capital,
-      pnl,
-      serverIP,
-      activeTradesCount:activeTrades.length,
-      scan:scanOutput,
-      activeTrades,
-      closedTrades,
-      shadowPnL,
-      strategyStats,
-      strategyAllocation,
-      exposure: getCurrentExposure(),
-      var: calculateVaR(),
-
-      // EXECUTION METRICS
-      latency: latencyStats.avgLatency
-    });
-  });
-}
-
-// ================= END EXECUTION OPTIMIZATION =================
-
-
-// ================= MARKET MICROSTRUCTURE EDGE (ORDER BOOK + LIQUIDITY) =================
-
-// --- ORDER BOOK ANALYSIS (using quote depth if available) ---
-function analyzeOrderBook(depth){
-  try{
-    if(!depth || !depth.buy || !depth.sell) return null;
-
-    let bidVol = depth.buy.reduce((a,b)=>a+b.quantity,0);
-    let askVol = depth.sell.reduce((a,b)=>a+b.quantity,0);
-
-    let imbalance = (bidVol - askVol) / (bidVol + askVol);
-
-    return {
-      bidVol,
-      askVol,
-      imbalance
-    };
-  }catch(e){
-    return null;
-  }
-}
-
-// --- LIQUIDITY FILTER ---
-function liquidityCheck(depth){
-  let ob = analyzeOrderBook(depth);
-  if(!ob) return true;
-
-  // Avoid thin liquidity
-  let total = ob.bidVol + ob.askVol;
-  if(total < 10000) return false;
-
-  return true;
-}
-
-// --- MICROSTRUCTURE SIGNAL BOOST ---
-function microstructureBias(signal, depth){
-  let ob = analyzeOrderBook(depth);
-  if(!ob) return signal;
-
-  // If strong bid dominance → favor BUY
-  if(ob.imbalance > 0.2 && signal === "BUY") return "BUY";
-
-  // If strong ask dominance → favor SELL
-  if(ob.imbalance < -0.2 && signal === "SELL") return "SELL";
-
-  // Weak alignment → cancel
-  if(Math.abs(ob.imbalance) < 0.05){
-    return null;
-  }
-
-  return signal;
-}
-
-// --- FINAL MICROSTRUCTURE GATE ---
-function microstructureGate(signal, depth){
-  if(!signal) return null;
-
-  if(!liquidityCheck(depth)){
-    return null;
-  }
-
-  return microstructureBias(signal, depth);
-}
-
-// ================= DASHBOARD EXTENSION =================
-const perfRoute7 = app._router.stack.find(r => r.route && r.route.path === '/performance');
-
-if(perfRoute7){
-  app.get("/performance",(req,res)=>{
-    res.json({
-      botActive:BOT_ACTIVE,
-      capital,
-      pnl,
-      serverIP,
-      activeTradesCount:activeTrades.length,
-      scan:scanOutput,
-      activeTrades,
-      closedTrades,
-      shadowPnL,
-      strategyStats,
-      strategyAllocation,
-      exposure: getCurrentExposure(),
-      var: calculateVaR(),
-      latency: latencyStats.avgLatency,
-
-      // MICROSTRUCTURE (last snapshot example)
-      microstructure: "enabled"
-    });
-  });
-}
-
-// ================= END MICROSTRUCTURE =================
-
-
-// ================= CROSS-MARKET ARBITRAGE + OPTIONS OVERLAY =================
-
-// -------- INDEX vs STOCK ARBITRAGE (SIMPLE SPREAD EDGE) --------
-function indexArbitrage(symbolPrice, indexPrice){
-  try{
-    if(!symbolPrice || !indexPrice) return null;
-
-    let spread = (symbolPrice / indexPrice);
-
-    // baseline (can tune)
-    if(spread > 1.02){
-      return "SELL"; // stock overvalued vs index
-    }
-    if(spread < 0.98){
-      return "BUY"; // stock undervalued
-    }
-
-    return null;
-  }catch(e){
-    return null;
-  }
-}
-
-// -------- OPTIONS OVERLAY (HEDGE LOGIC) --------
-function optionsHedge(signal, volatility){
-  try{
-    if(!signal) return null;
-
-    // crude hedge logic
-    if(volatility > 0.02){
-      return {
-        hedge: true,
-        type: signal === "BUY" ? "PUT" : "CALL"
-      };
-    }
-
-    return { hedge:false };
-
-  }catch(e){
-    return null;
-  }
-}
-
-// -------- IMPLIED VOLATILITY PROXY --------
-function estimateVolatility(history){
-  if(!history || history.length < 5) return 0;
-
-  let changes = [];
-  for(let i=1;i<history.length;i++){
-    changes.push(Math.abs(history[i] - history[i-1]) / history[i-1]);
-  }
-
-  return changes.reduce((a,b)=>a+b,0)/changes.length;
-}
-
-// -------- FINAL ARBITRAGE + OPTIONS GATE --------
-function advancedOverlay(signal, symbolPrice, indexPrice, history){
-  let arb = indexArbitrage(symbolPrice, indexPrice);
-
-  // If arbitrage contradicts → cancel
-  if(arb && arb !== signal){
-    return null;
-  }
-
-  let vol = estimateVolatility(history);
-  let hedge = optionsHedge(signal, vol);
-
-  return {
-    signal,
-    hedge
-  };
-}
-
-// ================= DASHBOARD EXTENSION =================
-const perfRoute8 = app._router.stack.find(r => r.route && r.route.path === '/performance');
-
-if(perfRoute8){
-  app.get("/performance",(req,res)=>{
-    res.json({
-      botActive:BOT_ACTIVE,
-      capital,
-      pnl,
-      serverIP,
-      activeTradesCount:activeTrades.length,
-      scan:scanOutput,
-      activeTrades,
-      closedTrades,
-      shadowPnL,
-      strategyStats,
-      strategyAllocation,
-      exposure: getCurrentExposure(),
-      var: calculateVaR(),
-      latency: latencyStats.avgLatency,
-
-      // OVERLAY STATUS
-      overlay: "enabled"
-    });
-  });
-}
-
-// ================= END OVERLAY =================
-
-
-// ================= MULTI-BROKER + SMART ORDER ROUTING (SOR) =================
-
-// --- BROKER CONFIG ---
-let brokers = {
-  primary: kite,   // Zerodha
-  secondary: null  // placeholder (future broker)
-};
-
-// --- ROUTING LOGIC ---
-function selectBroker(latency){
-  try{
-    // simple rule: if latency high, fallback
-    if(latencyStats.avgLatency > 250 && brokers.secondary){
-      return brokers.secondary;
-    }
-    return brokers.primary;
-  }catch(e){
-    return brokers.primary;
-  }
-}
-
-// --- SMART ORDER ROUTING ---
-async function smartOrderRoute(orderParams){
-  let broker = selectBroker(latencyStats.avgLatency);
-
-  try{
-    let start = Date.now();
-
-    // use existing execution optimizer (slicing)
-    let slices = sliceOrder(orderParams.quantity);
-
-    for(let q of slices){
-      let params = {
-        ...orderParams,
-        quantity: q
-      };
-
-      await broker.placeOrder("regular", params);
-
-      await new Promise(res => setTimeout(res, 120));
-    }
-
-    trackLatency(start);
-
-  }catch(e){
-    console.log("SOR Error:", e.message);
-
-    // fallback retry
-    if(brokers.secondary){
-      try{
-        await brokers.secondary.placeOrder("regular", orderParams);
-      }catch(err){
-        console.log("Fallback failed:", err.message);
-      }
-    }
-  }
-}
-
-// ================= DASHBOARD EXTENSION =================
-const perfRoute9 = app._router.stack.find(r => r.route && r.route.path === '/performance');
-
-if(perfRoute9){
-  app.get("/performance",(req,res)=>{
-    res.json({
-      botActive:BOT_ACTIVE,
-      capital,
-      pnl,
-      serverIP,
-      activeTradesCount:activeTrades.length,
-      scan:scanOutput,
-      activeTrades,
-      closedTrades,
-      shadowPnL,
-      strategyStats,
-      strategyAllocation,
-      exposure: getCurrentExposure(),
-      var: calculateVaR(),
-      latency: latencyStats.avgLatency,
-
-      // SOR METRICS
-      routing: {
-        primary: "Zerodha",
-        secondary: brokers.secondary ? "Enabled" : "Not Configured"
-      }
-    });
-  });
-}
-
-// ================= END SOR =================
-
-
-// ================= EXPECTANCY + EDGE VALIDATION MODULE =================
-
-// trade outcome tracking
-let tradeStats = {
-  wins: 0,
-  losses: 0,
-  total: 0,
-  totalWin: 0,
-  totalLoss: 0
-};
-
-// update after each closed trade
-function updateTradeStats(pnl){
-  tradeStats.total++;
-
-  if(pnl > 0){
-    tradeStats.wins++;
-    tradeStats.totalWin += pnl;
-  } else {
-    tradeStats.losses++;
-    tradeStats.totalLoss += pnl;
-  }
-}
-
-// compute expectancy
-function computeExpectancy(){
-  if(tradeStats.total === 0) return null;
-
-  let winRate = tradeStats.wins / tradeStats.total;
-  let lossRate = tradeStats.losses / tradeStats.total;
-
-  let avgWin = tradeStats.wins ? tradeStats.totalWin / tradeStats.wins : 0;
-  let avgLoss = tradeStats.losses ? Math.abs(tradeStats.totalLoss / tradeStats.losses) : 0;
-
-  let expectancy = (winRate * avgWin) - (lossRate * avgLoss);
-
-  return {
-    winRate,
-    lossRate,
-    avgWin,
-    avgLoss,
-    expectancy
-  };
-}
-
-// edge validation logic
-function edgeStatus(){
-  let e = computeExpectancy();
-  if(!e) return "NO_DATA";
-
-  if(e.expectancy > 0){
-    if(e.winRate > 0.55) return "STRONG_EDGE";
-    return "WEAK_EDGE";
-  }
-  return "NO_EDGE";
-}
-
-// ================= DASHBOARD EXTENSION =================
-const perfRoute10 = app._router.stack.find(r => r.route && r.route.path === '/performance');
-
-if(perfRoute10){
-  app.get("/performance",(req,res)=>{
-    let exp = computeExpectancy();
-
-    res.json({
-      botActive:BOT_ACTIVE,
-      capital,
-      pnl,
-      serverIP,
-      activeTradesCount:activeTrades.length,
-      scan:scanOutput,
-      activeTrades,
-      closedTrades,
-      shadowPnL,
-      strategyStats,
-      strategyAllocation,
-      exposure: getCurrentExposure(),
-      var: calculateVaR(),
-      latency: latencyStats.avgLatency,
-
-      // EDGE METRICS
-      expectancy: exp,
-      edge: edgeStatus()
-    });
-  });
-}
-
-// ================= END EXPECTANCY =================
-
-
-// ================= AUTO CAPITAL SCALING (EXPECTANCY-DRIVEN) =================
-
-// dynamic risk multiplier based on expectancy
-function expectancyRiskMultiplier(){
-  let e = computeExpectancy();
-  if(!e) return 1;
-
-  // strong edge
-  if(e.expectancy > 0 && e.winRate > 0.6){
-    return 1.5; // scale up
-  }
-
-  // moderate edge
-  if(e.expectancy > 0 && e.winRate > 0.52){
-    return 1.2;
-  }
-
-  // weak edge
-  if(e.expectancy > 0){
-    return 1.0;
-  }
-
-  // no edge → reduce risk
-  return 0.5;
-}
-
-// integrate with existing position sizing
-function finalQty(price, baseRiskPct){
-  if(!capital) return 1;
-
-  let multiplier = expectancyRiskMultiplier();
-  let risk = capital * baseRiskPct * multiplier;
-
-  return Math.max(1, Math.floor(risk / price));
-}
-
-// ================= DASHBOARD EXTENSION =================
-const perfRoute11 = app._router.stack.find(r => r.route && r.route.path === '/performance');
-
-if(perfRoute11){
-  app.get("/performance",(req,res)=>{
-    let exp = computeExpectancy();
-
-    res.json({
-      botActive:BOT_ACTIVE,
-      capital,
-      pnl,
-      serverIP,
-      activeTradesCount:activeTrades.length,
-      scan:scanOutput,
-      activeTrades,
-      closedTrades,
-      shadowPnL,
-      strategyStats,
-      strategyAllocation,
-      exposure: getCurrentExposure(),
-      var: calculateVaR(),
-      latency: latencyStats.avgLatency,
-
-      expectancy: exp,
-      edge: edgeStatus(),
-
-      // NEW SCALING METRIC
-      riskMultiplier: expectancyRiskMultiplier()
-    });
-  });
-}
-
-// ================= END AUTO SCALING =================
-
-
-// ================= WEEKLY PERFORMANCE REPORT + AUTO TUNING SUMMARY =================
-
-// store weekly snapshots
-let weeklyReport = [];
-
-// helper: get week number
-function getWeekKey(){
-  let d = new Date();
-  let onejan = new Date(d.getFullYear(),0,1);
-  let week = Math.ceil((((d - onejan) / 86400000) + onejan.getDay()+1)/7);
-  return `${d.getFullYear()}-W${week}`;
-}
-
-// aggregate weekly data
-function updateWeeklyReport(){
-  try{
-    let key = getWeekKey();
-    let existing = weeklyReport.find(w => w.week === key);
-
-    let exp = computeExpectancy() || {};
-
-    if(!existing){
-      weeklyReport.push({
-        week: key,
-        pnl,
-        trades: tradeStats.total,
-        winRate: exp.winRate || 0,
-        expectancy: exp.expectancy || 0
-      });
-    } else {
-      existing.pnl = pnl;
-      existing.trades = tradeStats.total;
-      existing.winRate = exp.winRate || 0;
-      existing.expectancy = exp.expectancy || 0;
-    }
-
-    // keep last 12 weeks
-    if(weeklyReport.length > 12) weeklyReport.shift();
-
-  }catch(e){
-    console.log("Weekly report error:", e.message);
-  }
-}
-
-// auto tuning summary
-function tuningSummary(){
-  let exp = computeExpectancy();
-  if(!exp) return "NO_DATA";
-
-  if(exp.expectancy > 0 && exp.winRate > 0.6){
-    return "SYSTEM STRONG → consider scaling capital";
-  }
-
-  if(exp.expectancy > 0){
-    return "SYSTEM STABLE → maintain settings";
-  }
-
-  return "SYSTEM WEAK → tighten filters / reduce risk";
-}
-
-// ================= DASHBOARD EXTENSION =================
-const perfRoute12 = app._router.stack.find(r => r.route && r.route.path === '/performance');
-
-if(perfRoute12){
-  app.get("/performance",(req,res)=>{
-    let exp = computeExpectancy();
-
-    res.json({
-      botActive:BOT_ACTIVE,
-      capital,
-      pnl,
-      serverIP,
-      activeTradesCount:activeTrades.length,
-      scan:scanOutput,
-      activeTrades,
-      closedTrades,
-      shadowPnL,
-      strategyStats,
-      strategyAllocation,
-      exposure: getCurrentExposure(),
-      var: calculateVaR(),
-      latency: latencyStats.avgLatency,
-
-      expectancy: exp,
-      edge: edgeStatus(),
-      riskMultiplier: expectancyRiskMultiplier(),
-
-      // NEW REPORTING
-      weeklyReport,
-      tuning: tuningSummary()
-    });
-  });
-}
-
-// ================= END WEEKLY REPORT =================
-
-
-// ================= FUND-STYLE CONTROL PANEL =================
-
-// consolidated decision engine
-function fundControlPanel(){
-  let exp = computeExpectancy() || {};
-  let dd = maxDrawdown || 0;
-  let risk = expectancyRiskMultiplier ? expectancyRiskMultiplier() : 1;
-
-  let decision = "HOLD";
-
-  if(exp.expectancy > 0 && exp.winRate > 0.6 && dd < 0.03){
-    decision = "SCALE UP";
-  } else if(exp.expectancy > 0 && dd < 0.05){
-    decision = "MAINTAIN";
-  } else if(exp.expectancy <= 0 || dd > 0.05){
-    decision = "REDUCE RISK";
-  }
-
-  return {
-    capital,
-    pnl,
-    drawdown: dd,
-    expectancy: exp.expectancy || 0,
-    winRate: exp.winRate || 0,
-    riskMultiplier: risk,
-    decision
-  };
-}
-
-// ================= DASHBOARD EXTENSION =================
-const perfRouteFinal = app._router.stack.find(r => r.route && r.route.path === '/performance');
-
-if(perfRouteFinal){
-  app.get("/performance",(req,res)=>{
-    res.json({
-      botActive:BOT_ACTIVE,
-      capital,
-      pnl,
-      serverIP,
-      activeTradesCount:activeTrades.length,
-      scan:scanOutput,
-      activeTrades,
-      closedTrades,
-
-      // FUND PANEL
-      fundPanel: fundControlPanel(),
-
-      // EXISTING
-      expectancy: computeExpectancy(),
-      edge: edgeStatus(),
-      weeklyReport
-    });
-  });
-}
-
-// ================= END FUND PANEL =================
-
-
-// ================= MONTHLY CAPITAL PLANNER + AUTO REINVEST =================
-
-// config
-let capitalPlan = {
-  monthlyAddition: 10000,   // user adjustable
-  reinvestPercent: 0.7      // 70% profits reinvested
-};
-
-let monthlyStats = {
-  startCapital: 0,
-  currentMonth: new Date().getMonth(),
-  profit: 0
-};
-
-// reset at new month
-function checkMonthReset(){
-  let nowMonth = new Date().getMonth();
-  if(nowMonth !== monthlyStats.currentMonth){
-    monthlyStats.startCapital = capital;
-    monthlyStats.currentMonth = nowMonth;
-    monthlyStats.profit = 0;
-  }
-}
-
-// update monthly profit
-function updateMonthlyProfit(){
-  checkMonthReset();
-  monthlyStats.profit = capital - monthlyStats.startCapital;
-}
-
-// planner logic
-function capitalPlanner(){
-  updateMonthlyProfit();
-
-  let reinvest = monthlyStats.profit > 0 
-    ? monthlyStats.profit * capitalPlan.reinvestPercent 
-    : 0;
-
-  let withdraw = monthlyStats.profit > 0 
-    ? monthlyStats.profit * (1 - capitalPlan.reinvestPercent) 
-    : 0;
-
-  let projectedNext = capital + capitalPlan.monthlyAddition + reinvest;
-
-  return {
-    startCapital: monthlyStats.startCapital,
-    currentCapital: capital,
-    monthlyProfit: monthlyStats.profit,
-    reinvest,
-    withdraw,
-    monthlyAddition: capitalPlan.monthlyAddition,
-    projectedNextCapital: projectedNext
-  };
-}
-
-// ================= DASHBOARD EXTENSION =================
-const perfRoute13 = app._router.stack.find(r => r.route && r.route.path === '/performance');
-
-if(perfRoute13){
-  app.get("/performance",(req,res)=>{
-    res.json({
-      botActive:BOT_ACTIVE,
-      capital,
-      pnl,
-      serverIP,
-      activeTradesCount:activeTrades.length,
-      scan:scanOutput,
-      activeTrades,
-      closedTrades,
-
-      fundPanel: fundControlPanel(),
-
-      expectancy: computeExpectancy(),
-      edge: edgeStatus(),
-      weeklyReport,
-
-      // NEW CAPITAL PLAN
-      capitalPlan: capitalPlanner()
-    });
-  });
-}
-
-// ================= END CAPITAL PLANNER =================
