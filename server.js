@@ -18,30 +18,20 @@ let accessToken = null;
 let state = {
   capital: 0,
   serverIP: null,
-  executionStats: {
-    totalTrades: 0,
-    avgSlippage: 0,
-    avgLatency: 0,
-    slippages: [],
-    latencies: []
-  },
-  activeTrades: [],
   rankedSignals: [],
+  activeTrades: [],
   mode: LIVE ? "LIVE" : "PAPER"
 };
 
-// ===== LARGE STOCK UNIVERSE (200+) =====
+// ===== UNIVERSE (TOP NSE STOCKS SAMPLE) =====
 const universe = [
-  "NSE:RELIANCE","NSE:TCS","NSE:INFY","NSE:HDFCBANK","NSE:ICICIBANK",
-  "NSE:SBIN","NSE:AXISBANK","NSE:KOTAKBANK","NSE:ITC","NSE:LT",
-  "NSE:WIPRO","NSE:ULTRACEMCO","NSE:MARUTI","NSE:BAJFINANCE","NSE:ASIANPAINT",
-  "NSE:HCLTECH","NSE:TECHM","NSE:TITAN","NSE:ADANIENT","NSE:ADANIPORTS"
+"NSE:RELIANCE","NSE:TCS","NSE:INFY","NSE:HDFCBANK","NSE:ICICIBANK",
+"NSE:SBIN","NSE:AXISBANK","NSE:KOTAKBANK","NSE:ITC","NSE:LT",
+"NSE:WIPRO","NSE:ULTRACEMCO","NSE:MARUTI","NSE:BAJFINANCE","NSE:ASIANPAINT",
+"NSE:HCLTECH","NSE:TECHM","NSE:TITAN","NSE:ADANIENT","NSE:ADANIPORTS"
 ];
 
-// duplicate to simulate 200+ (safe for now)
-for(let i=0;i<10;i++){
-  universe.push(...universe);
-}
+for(let i=0;i<10;i++){ universe.push(...universe); }
 
 // ===== LOAD TOKEN =====
 if (fs.existsSync(TOKEN_FILE)) {
@@ -53,85 +43,89 @@ if (fs.existsSync(TOKEN_FILE)) {
 }
 
 // ===== LOGIN =====
-app.get('/login', (req, res) => res.redirect(kite.getLoginURL()));
+app.get('/login', (req,res)=>res.redirect(kite.getLoginURL()));
 
-app.get('/redirect', async (req, res) => {
-  try {
+app.get('/redirect', async (req,res)=>{
+  try{
     const session = await kite.generateSession(req.query.request_token, process.env.KITE_API_SECRET);
     accessToken = session.access_token;
     kite.setAccessToken(accessToken);
-    fs.writeFileSync(TOKEN_FILE, JSON.stringify({ token: accessToken }));
+    fs.writeFileSync(TOKEN_FILE, JSON.stringify({token:accessToken}));
 
     const ip = await axios.get("https://api.ipify.org?format=json");
     state.serverIP = ip.data.ip;
 
-    res.send("Login success | IP: " + ip.data.ip);
-  } catch {
+    res.send("Login success | IP: "+ip.data.ip);
+  }catch{
     res.send("Login failed");
   }
 });
 
-// ===== CAPITAL FIX =====
-async function updateCapital() {
-  try {
+// ===== CAPITAL =====
+async function updateCapital(){
+  try{
     const m = await kite.getMargins();
     state.capital = m?.equity?.available?.cash || m?.equity?.net || 0;
-  } catch {
-    state.capital = 0;
-  }
+  }catch{}
+}
+
+// ===== SCORING MODEL =====
+function calculateScore(q){
+  const price = q.last_price;
+  const open = q.ohlc.open;
+  const high = q.ohlc.high;
+  const low = q.ohlc.low;
+  const volume = q.volume;
+
+  if(!price || !open || !high || !low || !volume) return 0;
+
+  // TREND
+  const trend = (price - open) / open;
+
+  // VOLATILITY
+  const volatility = (high - low) / open;
+
+  // STRENGTH (close near high)
+  const strength = (price - low) / (high - low + 0.0001);
+
+  // VOLUME (normalized)
+  const volScore = Math.log(volume + 1) / 20;
+
+  // FINAL SCORE
+  return (trend * 0.4) + (volatility * 0.2) + (strength * 0.3) + (volScore * 0.1);
 }
 
 // ===== EXECUTION =====
-async function executeOrder(sym, qty, price) {
-  if (!LIVE) return price;
+async function executeOrder(sym, qty, price){
+  if(!LIVE) return price;
 
-  const start = Date.now();
-
-  try {
+  try{
     const [exchange, tradingsymbol] = sym.split(":");
 
-    const orderId = await kite.placeOrder("regular", {
+    const orderId = await kite.placeOrder("regular",{
       exchange,
       tradingsymbol,
-      transaction_type: "BUY",
-      quantity: qty,
-      product: "MIS",
-      order_type: "MARKET",
-      market_protection: 2
+      transaction_type:"BUY",
+      quantity:qty,
+      product:"MIS",
+      order_type:"MARKET",
+      market_protection:2
     });
 
     const orders = await kite.getOrders();
-    const order = orders.find(o => o.order_id === orderId);
+    const order = orders.find(o=>o.order_id===orderId);
 
-    const end = Date.now();
-    const latency = end - start;
+    return order?.average_price || price;
 
-    const execPrice = order?.average_price || price;
-    const slippage = (execPrice - price) / price;
-
-    state.executionStats.totalTrades++;
-    state.executionStats.slippages.push(slippage);
-    state.executionStats.latencies.push(latency);
-
-    state.executionStats.avgSlippage =
-      state.executionStats.slippages.reduce((a,b)=>a+b,0) /
-      state.executionStats.slippages.length;
-
-    state.executionStats.avgLatency =
-      state.executionStats.latencies.reduce((a,b)=>a+b,0) /
-      state.executionStats.latencies.length;
-
-    return execPrice;
-
-  } catch (e) {
+  }catch{
     return price;
   }
 }
 
 // ===== MAIN LOOP =====
-setInterval(async () => {
-  try {
-    if (!accessToken) return;
+setInterval(async()=>{
+  try{
+    if(!accessToken) return;
 
     await updateCapital();
 
@@ -140,13 +134,15 @@ setInterval(async () => {
 
     let signals = [];
 
-    for (const sym of chunk) {
+    for(const sym of chunk){
       const q = quotes[sym];
-      if (!q || !q.last_price) continue;
+      if(!q || !q.last_price || !q.ohlc) continue;
+
+      const score = calculateScore(q);
 
       signals.push({
         symbol: sym,
-        score: Math.random(),
+        score,
         price: q.last_price
       });
     }
@@ -154,28 +150,27 @@ setInterval(async () => {
     signals.sort((a,b)=>b.score-a.score);
     state.rankedSignals = signals.slice(0,5);
 
-    // execute top signals
-    for (const s of state.rankedSignals) {
-      if (state.activeTrades.length >= 5) break;
+    for(const s of state.rankedSignals){
+      if(state.activeTrades.length >= 5) break;
 
-      const qty = Math.max(1, Math.floor((state.capital * 0.02) / s.price));
+      const qty = Math.max(1, Math.floor((state.capital * 0.02)/s.price));
       const execPrice = await executeOrder(s.symbol, qty, s.price);
 
       state.activeTrades.push({
-        symbol: s.symbol,
-        entry: execPrice,
-        qty
+        symbol:s.symbol,
+        entry:execPrice,
+        qty,
+        score:s.score
       });
     }
 
-  } catch (e) {
+  }catch(e){
     console.log("ERROR", e.message);
   }
-}, 5000);
+},5000);
 
 // ===== ROUTES =====
-app.get('/', (req,res)=>res.json(state));
-app.get('/performance', (req,res)=>res.json(state));
-app.get('/execution', (req,res)=>res.json(state.executionStats));
+app.get('/',(req,res)=>res.json(state));
+app.get('/performance',(req,res)=>res.json(state));
 
-app.listen(PORT, () => console.log("V29 FINAL SYSTEM RUNNING"));
+app.listen(PORT, ()=>console.log("V30 ALPHA SYSTEM RUNNING"));
