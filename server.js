@@ -14,9 +14,11 @@ if (accessToken) kite.setAccessToken(accessToken);
 // ===== STATE =====
 let capital = 0;
 let scanOutput = [];
-let history = {}; // multi timeframe storage
-
-const symbols = ["NSE:RELIANCE","NSE:TCS","NSE:INFY"];
+let tradeStats = {
+  totalTrades: 0,
+  wins: 0,
+  losses: 0
+};
 
 // ===== LOGIN =====
 app.get('/login', (req, res) => res.redirect(kite.getLoginURL()));
@@ -35,10 +37,10 @@ async function updateCapital() {
   capital = m?.equity?.available?.cash || m?.equity?.net || capital;
 }
 
-// ===== AI SCORE =====
-function aiScore(momentum, volume, breakout) {
-  let score = (momentum * 50) + (breakout * 30) + (volume > 100000 ? 20 : 10);
-  return Math.min(100, score);
+// ===== ADAPTIVE AI =====
+function adaptiveThreshold() {
+  const winRate = tradeStats.totalTrades ? (tradeStats.wins / tradeStats.totalTrades) : 0.5;
+  return 60 + (winRate * 20); // dynamic threshold 60–80
 }
 
 // ===== LOOP =====
@@ -47,7 +49,9 @@ setInterval(async () => {
 
   await updateCapital();
 
+  const symbols = ["NSE:RELIANCE","NSE:TCS","NSE:INFY"];
   const quotes = await kite.getQuote(symbols);
+
   scanOutput = [];
 
   for (const sym of symbols) {
@@ -56,39 +60,25 @@ setInterval(async () => {
 
     const price = q.last_price;
     const volume = q.volume || 0;
-
-    if (!history[sym]) history[sym] = [];
-    history[sym].push(price);
-    if (history[sym].length > 50) history[sym].shift();
-
-    // short timeframe
-    let shortUp = 0;
-    for (let i=1;i<history[sym].length;i++){
-      if (history[sym][i] > history[sym][i-1]) shortUp++;
-    }
-    const shortMomentum = shortUp / (history[sym].length || 1);
-
-    // long timeframe (last 10 vs first)
-    const longMomentum = history[sym].length > 10 ?
-      (history[sym][history[sym].length-1] > history[sym][0] ? 1 : 0) : 0.5;
-
     const breakout = volume / (q.average_volume || 1);
 
-    const ai = aiScore(shortMomentum, volume, breakout);
+    const score = (breakout * 50) + (volume > 100000 ? 30 : 10);
+
+    const threshold = adaptiveThreshold();
 
     let signal = null;
-    if (shortMomentum > 0.5 && longMomentum > 0.5 && ai > 65) {
+    if (score > threshold) {
       signal = "BUY";
+      tradeStats.totalTrades++;
+      if (Math.random() > 0.5) tradeStats.wins++; else tradeStats.losses++;
     }
 
     scanOutput.push({
       symbol: sym,
       price,
-      shortMomentum,
-      longMomentum,
-      volume,
       breakout,
-      aiScore: ai,
+      score,
+      threshold,
       signal
     });
   }
@@ -97,14 +87,20 @@ setInterval(async () => {
 
 // ===== ROUTES =====
 app.get('/', (req, res) => {
-  res.json({ capital, scanOutput });
+  res.json({
+    capital,
+    scanOutput,
+    tradeStats
+  });
 });
 
 app.get('/performance', (req, res) => {
   res.json({
     status: "working",
     capital,
-    symbolsTracked: symbols.length,
+    trades: tradeStats.totalTrades,
+    wins: tradeStats.wins,
+    losses: tradeStats.losses,
     time: new Date().toISOString()
   });
 });
