@@ -66,11 +66,9 @@ app.get("/performance", async (req, res) => {
     // SIMPLE SIGNALS (stable)
     const symbols = require("./nse200.json");
 
-    const rankedSignals = symbols.map((s) => ({
-      symbol: s,
-      price: Math.random() * 1000 + 100,
-      score: Math.random(),
-    }));
+    const generateSignals = require("./engine/strategyEngine");
+
+const rankedSignals = generateSignals(symbols);
 
     if (process.env.LIVE_TRADING === "true") {
       activeTrades = await runLiveEngine(rankedSignals, capital, kc);
