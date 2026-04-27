@@ -16,12 +16,11 @@ function generateSignals(symbols) {
       volatility * 0.2;
 
     // FILTER (IMPORTANT)
-    if (score > 0.75) {
-      signals.push({
-        symbol: sym,
-        price,
-        score
-      });
+   signals.push({
+  symbol: sym,
+  price,
+  score
+});
     }
   }
 
