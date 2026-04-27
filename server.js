@@ -10,10 +10,8 @@ const PORT = process.env.PORT || 3000;
 
 const LIVE = process.env.LIVE_TRADING === "true";
 const FORCE_PAPER = process.env.FORCE_PAPER === "true";
-const TOKEN_FILE = "access_token.json";
 
 let kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
-let accessToken = null;
 
 let state = {
   capital: 100000,
@@ -23,55 +21,19 @@ let state = {
   rankedSignals: [],
   activeTrades: [],
   closedTrades: [],
+  weights: {trend:0.3, strength:0.3, volatility:0.2, volume:0.2},
   mode: FORCE_PAPER ? "PAPER" : (LIVE ? "LIVE" : "PAPER")
 };
 
-// load token
-if (fs.existsSync(TOKEN_FILE)) {
-  try {
-    const saved = JSON.parse(fs.readFileSync(TOKEN_FILE));
-    accessToken = saved.token;
-    kite.setAccessToken(accessToken);
-  } catch {}
-}
-
-// login
-app.get('/login', (req,res)=>res.redirect(kite.getLoginURL()));
-
-app.get('/redirect', async (req,res)=>{
+// IP
+(async ()=>{
   try{
-    const session = await kite.generateSession(req.query.request_token, process.env.KITE_API_SECRET);
-    accessToken = session.access_token;
-    kite.setAccessToken(accessToken);
-    fs.writeFileSync(TOKEN_FILE, JSON.stringify({token:accessToken}));
-
     const ip = await axios.get("https://api.ipify.org?format=json");
     state.serverIP = ip.data.ip;
+  }catch{}
+})();
 
-    res.send("Login success | IP: " + ip.data.ip);
-  }catch{
-    res.send("Login failed");
-  }
-});
-
-// capital
-async function updateCapital(){
-  if(FORCE_PAPER) return;
-
-  try{
-    const m = await kite.getMargins();
-    console.log("MARGIN RAW:", JSON.stringify(m));
-    const cash = m?.equity?.available?.cash;
-    if(cash && cash > 0){
-      state.capital = cash;
-      state.peakCapital = Math.max(state.peakCapital, cash);
-    }
-  }catch(e){
-    console.log("CAPITAL ERROR:", e.message);
-  }
-}
-
-// universe
+// Universe (expanded)
 const universe = [
 "NSE:RELIANCE","NSE:TCS","NSE:INFY","NSE:HDFCBANK","NSE:ICICIBANK",
 "NSE:SBIN","NSE:AXISBANK","NSE:KOTAKBANK","NSE:ITC","NSE:LT",
@@ -80,73 +42,109 @@ const universe = [
 "NSE:ONGC","NSE:NTPC","NSE:POWERGRID","NSE:TATASTEEL","NSE:HINDALCO"
 ];
 
-// batch quotes
+// quotes
 async function getQuotes(symbols){
   let result = {};
   for(let i=0;i<symbols.length;i+=50){
     try{
       const q = await kite.getQuote(symbols.slice(i,i+50));
       result = {...result,...q};
-    }catch{}
+    }catch(e){
+      console.log("QUOTE ERROR:", e.message);
+    }
   }
   return result;
 }
 
 // scoring
 function score(q){
-  const p=q.last_price,o=q.ohlc.open,h=q.ohlc.high,l=q.ohlc.low;
+  const p=q.last_price,o=q.ohlc.open,h=q.ohlc.high,l=q.ohlc.low,v=q.volume||1;
+
   if(!p||!o||!h||!l) return 0;
-  return ((p-o)/o)+((p-l)/(h-l+0.0001));
+
+  const trend = (p-o)/o;
+  const strength = (p-l)/(h-l+0.0001);
+  const volatility = (h-l)/o;
+  const volume = Math.log(v+1)/10;
+
+  return (
+    trend*state.weights.trend +
+    strength*state.weights.strength +
+    volatility*state.weights.volatility +
+    volume*state.weights.volume
+  );
 }
 
-// SAFE allocation
+// allocation
 function allocate(signals){
-  const riskPerTrade = state.capital * 0.01;
-  const maxExposure = state.capital * 0.5;
+  const risk = state.capital * 0.01;
+  const maxExp = state.capital * 0.5;
 
-  let used = 0;
-  let output = [];
+  let used=0, out=[];
 
   for(const s of signals){
-    const stopDistance = s.price * 0.01;
-    let qty = Math.floor(riskPerTrade / stopDistance);
+    const stop = s.price * 0.01;
+    let qty = Math.floor(risk / stop);
+    if(qty<=0) qty=1;
 
-    if(qty <= 0) qty = 1;
+    const exp = qty*s.price;
+    if(used + exp > maxExp) continue;
 
-    const exposure = qty * s.price;
-
-    if(used + exposure > maxExposure) continue;
-
-    used += exposure;
-
-    output.push({
-      ...s,
-      qty
-    });
+    used += exp;
+    out.push({...s, qty});
   }
-
-  return output;
+  return out;
 }
 
-// loop
+// learning engine
+function updateWeights(){
+  if(state.closedTrades.length < 5) return;
+
+  const wins = state.closedTrades.filter(t=>t.pnl>0).length;
+  const losses = state.closedTrades.length - wins;
+
+  if(wins > losses){
+    state.weights.trend += 0.01;
+    state.weights.strength += 0.01;
+  } else {
+    state.weights.volatility += 0.01;
+  }
+
+  // normalize
+  const total = Object.values(state.weights).reduce((a,b)=>a+b,0);
+  for(let k in state.weights){
+    state.weights[k] /= total;
+  }
+}
+
+// engine loop
 setInterval(async ()=>{
-  if(!accessToken && !FORCE_PAPER) return;
-
-  await updateCapital();
-
   const quotes = await getQuotes(universe);
 
   let signals=[];
+
   for(const s of universe){
-    const q=quotes[s];
+    const q = quotes[s];
     if(!q) continue;
-    signals.push({symbol:s,price:q.last_price,score:score(q)});
+
+    signals.push({
+      symbol:s,
+      price:q.last_price,
+      score:score(q)
+    });
   }
+
+  console.log("TOTAL SIGNALS:", signals.length);
 
   signals.sort((a,b)=>b.score-a.score);
 
-  const top = signals.slice(0,10); // wider pool
-  const allocated = allocate(top).slice(0,5);
+  let top = signals.slice(0,10);
+  let allocated = allocate(top).slice(0,5);
+
+  // fallback
+  if(allocated.length === 0 && top.length > 0){
+    allocated = top.slice(0,3).map(s => ({...s, qty:1}));
+  }
 
   state.rankedSignals = allocated;
 
@@ -163,6 +161,21 @@ setInterval(async ()=>{
       startTime:Date.now()
     });
   }
+
+  // simulate exit
+  state.activeTrades = state.activeTrades.filter(t=>{
+    const current = t.entry * (1 + (Math.random()-0.5)*0.02);
+
+    if(current >= t.target || current <= t.sl){
+      const pnl = (current - t.entry) * t.qty;
+      state.pnl += pnl;
+      state.closedTrades.push({...t, exit:current, pnl});
+      return false;
+    }
+    return true;
+  });
+
+  updateWeights();
 
 },5000);
 
@@ -183,10 +196,10 @@ app.get('/',(req,res)=>{
   window.onload=load;
   </script>
   <body style="background:black;color:#0f0;font-family:monospace">
-  <h2>V45 SAFE ENGINE</h2>
+  <h2>V46 LEARNING ENGINE</h2>
   <pre id="d"></pre>
   </body></html>
   `);
 });
 
-app.listen(PORT,()=>console.log("V45 SAFE RUNNING"));
+app.listen(PORT,()=>console.log("V46 RUNNING"));
