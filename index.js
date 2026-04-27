@@ -4,6 +4,7 @@ const fs = require("fs");
 const { KiteConnect } = require("kiteconnect");
 
 const runLiveEngine = require("./engine/liveEngine");
+const generateSignals = require("./engine/strategyEngine");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -13,8 +14,6 @@ const kc = new KiteConnect({
 });
 
 let access_token = null;
-let capital = 0;
-let activeTrades = [];
 
 // HOME
 app.get("/", (req, res) => {
@@ -23,8 +22,7 @@ app.get("/", (req, res) => {
 
 // LOGIN
 app.get("/login", (req, res) => {
-  const url = kc.getLoginURL();
-  res.redirect(url);
+  res.redirect(kc.getLoginURL());
 });
 
 // REDIRECT
@@ -61,24 +59,23 @@ app.get("/performance", async (req, res) => {
     }
 
     const margins = await kc.getMargins();
-    capital = margins.equity.available.live_balance;
+    const capital = margins.equity.available.live_balance;
 
-    // SIMPLE SIGNALS (stable)
     const symbols = require("./nse200.json");
+    const signals = generateSignals(symbols);
 
-    const generateSignals = require("./engine/strategyEngine");
-
-const rankedSignals = generateSignals(symbols);
+    let trades = [];
 
     if (process.env.LIVE_TRADING === "true") {
-      activeTrades = await runLiveEngine(rankedSignals, capital, kc);
+      trades = await runLiveEngine(signals, capital, kc);
     }
 
     res.json({
       capital,
-      activeTrades,
+      activeTrades: trades,
       mode: process.env.LIVE_TRADING === "true" ? "LIVE" : "PAPER",
     });
+
   } catch (err) {
     res.json({ error: err.message });
   }

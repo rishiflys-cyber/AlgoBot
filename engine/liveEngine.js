@@ -10,10 +10,9 @@ async function runLiveEngine(stocks, capital, kc) {
 
   for (let stock of selected) {
     const riskAmount = capital * RISK_PER_TRADE;
-
     const sl = stock.price * 0.98;
-    const qty = Math.floor(riskAmount / (stock.price - sl));
 
+    const qty = Math.floor(riskAmount / (stock.price - sl));
     if (qty <= 0) continue;
 
     try {
@@ -32,6 +31,7 @@ async function runLiveEngine(stocks, capital, kc) {
         entry: stock.price,
         sl,
       });
+
     } catch (err) {
       console.log("Order error:", err.message);
     }
