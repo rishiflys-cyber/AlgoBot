@@ -1,13 +1,13 @@
 
 {
-"name":"algobot-v39-learning",
-"version":"1.0.0",
-"main":"server.js",
-"scripts":{"start":"node server.js"},
-"dependencies":{
-"express":"^4.18.2",
-"dotenv":"^16.0.0",
-"kiteconnect":"^4.0.0",
-"axios":"^1.6.0"
-}
+  "name": "algobot-v40-hedgefund",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "dependencies": {
+    "express": "^4.18.2",
+    "dotenv": "^16.0.0",
+    "kiteconnect": "^4.0.0",
+    "axios": "^1.6.0"
+  }
 }
