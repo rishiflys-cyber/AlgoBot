@@ -1,4 +1,3 @@
-
 require('dotenv').config();
 const express = require('express');
 const fs = require('fs');
@@ -16,6 +15,7 @@ let accessToken = null;
 
 let state = {
   capital: 0,
+  pnl: 0,
   serverIP: null,
   rankedSignals: [],
   activeTrades: [],
@@ -23,7 +23,6 @@ let state = {
   mode: LIVE ? "LIVE" : "PAPER"
 };
 
-// ===== LOAD TOKEN =====
 if(fs.existsSync(TOKEN_FILE)){
   try{
     const saved = JSON.parse(fs.readFileSync(TOKEN_FILE));
@@ -32,7 +31,6 @@ if(fs.existsSync(TOKEN_FILE)){
   }catch{}
 }
 
-// ===== LOGIN =====
 app.get('/login',(req,res)=>res.redirect(kite.getLoginURL()));
 
 app.get('/redirect', async(req,res)=>{
@@ -51,7 +49,6 @@ app.get('/redirect', async(req,res)=>{
   }
 });
 
-// ===== CAPITAL =====
 async function updateCapital(){
   try{
     const m = await kite.getMargins();
@@ -59,25 +56,8 @@ async function updateCapital(){
   }catch{}
 }
 
-// ===== REALISTIC LARGE UNIVERSE (UNIQUE SYMBOLS SAMPLE ~120, extendable) =====
-const universe = [
-"NSE:RELIANCE","NSE:TCS","NSE:INFY","NSE:HDFCBANK","NSE:ICICIBANK","NSE:SBIN",
-"NSE:AXISBANK","NSE:KOTAKBANK","NSE:ITC","NSE:LT","NSE:WIPRO","NSE:ULTRACEMCO",
-"NSE:MARUTI","NSE:BAJFINANCE","NSE:ASIANPAINT","NSE:HCLTECH","NSE:TECHM",
-"NSE:TITAN","NSE:ADANIENT","NSE:ADANIPORTS","NSE:ONGC","NSE:COALINDIA",
-"NSE:NTPC","NSE:POWERGRID","NSE:BHARTIARTL","NSE:JSWSTEEL","NSE:TATASTEEL",
-"NSE:HINDALCO","NSE:GRASIM","NSE:DRREDDY","NSE:CIPLA","NSE:DIVISLAB",
-"NSE:SUNPHARMA","NSE:APOLLOHOSP","NSE:NESTLEIND","NSE:BRITANNIA",
-"NSE:DABUR","NSE:GODREJCP","NSE:COLPAL","NSE:INDUSINDBK","NSE:HEROMOTOCO",
-"NSE:EICHERMOT","NSE:BAJAJ-AUTO","NSE:BPCL","NSE:HINDPETRO","NSE:IOC",
-"NSE:UPL","NSE:PIIND","NSE:SRF","NSE:DEEPAKNTR","NSE:HAL","NSE:BHEL",
-"NSE:IRCTC","NSE:ZOMATO","NSE:PAYTM","NSE:NYKAA","NSE:DMART","NSE:PAGEIND",
-"NSE:AMBUJACEM","NSE:ACC","NSE:SIEMENS","NSE:ABB","NSE:DLF","NSE:LODHA",
-"NSE:GAIL","NSE:PETRONET","NSE:MFSL","NSE:CHOLAFIN","NSE:SHRIRAMFIN",
-"NSE:TRENT","NSE:ADANIGREEN","NSE:ADANIPOWER","NSE:ADANITRANS"
-];
+const universe = ["NSE:RELIANCE","NSE:TCS","NSE:INFY","NSE:HDFCBANK","NSE:ICICIBANK","NSE:SBIN","NSE:AXISBANK","NSE:KOTAKBANK","NSE:ITC","NSE:LT"];
 
-// ===== ATR =====
 function calculateATR(q){
   const h = q.ohlc.high;
   const l = q.ohlc.low;
@@ -85,14 +65,12 @@ function calculateATR(q){
   return Math.max(h-l, Math.abs(h-c), Math.abs(l-c));
 }
 
-// ===== POSITION SIZE =====
 function getQty(price, atr){
   const risk = state.capital * 0.01;
   if(atr <= 0) return 1;
   return Math.max(1, Math.floor(risk / atr));
 }
 
-// ===== FINAL FIXED SCORING =====
 function score(q){
   const p = q.last_price;
   const o = q.ohlc.open;
@@ -107,38 +85,43 @@ function score(q){
   const volatility = (h - l) / o;
   const volume = Math.log(v + 1);
 
-  return (
-    trend * 0.3 +
-    strength * 0.3 +
-    volatility * 0.2 +
-    volume * 0.2
-  );
+  return trend*0.3 + strength*0.3 + volatility*0.2 + volume*0.2;
 }
 
-// ===== MAIN LOOP =====
 setInterval(async()=>{
   try{
     if(!accessToken) return;
 
     await updateCapital();
+    const quotes = await kite.getQuote(universe);
 
-    const chunk = universe.slice(0,200);
-    const quotes = await kite.getQuote(chunk);
+    for (let trade of state.activeTrades) {
+      const q = quotes[trade.symbol];
+      if (!q) continue;
+
+      trade.price = q.last_price;
+
+      if (trade.price >= trade.target) {
+        state.closedTrades.push({...trade, exit: trade.price, result: "WIN", pnl: (trade.price - trade.entry) * trade.qty});
+      } else if (trade.price <= trade.sl) {
+        state.closedTrades.push({...trade, exit: trade.price, result: "LOSS", pnl: (trade.price - trade.entry) * trade.qty});
+      }
+    }
+
+    state.activeTrades = state.activeTrades.filter(t =>
+      !state.closedTrades.find(c => c.startTime === t.startTime)
+    );
+
+    state.pnl = state.closedTrades.reduce((sum, t) => sum + t.pnl, 0);
 
     let signals = [];
-
-    for(const sym of chunk){
+    for(const sym of universe){
       const q = quotes[sym];
       if(!q || !q.last_price || !q.ohlc) continue;
 
       const atr = calculateATR(q);
 
-      signals.push({
-        symbol:sym,
-        price:q.last_price,
-        score:score(q),
-        atr
-      });
+      signals.push({symbol:sym, price:q.last_price, score:score(q), atr});
     }
 
     signals.sort((a,b)=>b.score-a.score);
@@ -166,8 +149,7 @@ setInterval(async()=>{
   }
 },5000);
 
-// ===== ROUTES =====
 app.get('/',(req,res)=>res.json(state));
 app.get('/performance',(req,res)=>res.json(state));
 
-app.listen(PORT, ()=>console.log("V37 FINAL SYSTEM RUNNING"));
+app.listen(PORT, ()=>console.log("V38 RUNNING"));
