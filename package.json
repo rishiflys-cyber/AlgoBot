@@ -1,6 +1,6 @@
 
 {
-"name":"algobot-force-test",
+"name":"algobot-v39-learning",
 "version":"1.0.0",
 "main":"server.js",
 "scripts":{"start":"node server.js"},

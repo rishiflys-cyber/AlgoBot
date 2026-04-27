@@ -14,6 +14,14 @@ const TOKEN_FILE = "access_token.json";
 let kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
 let accessToken = null;
 
+// LEARNING WEIGHTS
+let weights = {
+  trend: 0.3,
+  strength: 0.3,
+  volatility: 0.2,
+  volume: 0.2
+};
+
 let state = {
   capital: 0,
   pnl: 0,
@@ -24,6 +32,7 @@ let state = {
   mode: LIVE ? "LIVE" : "PAPER"
 };
 
+// LOAD TOKEN
 if(fs.existsSync(TOKEN_FILE)){
   try{
     const saved = JSON.parse(fs.readFileSync(TOKEN_FILE));
@@ -32,6 +41,7 @@ if(fs.existsSync(TOKEN_FILE)){
   }catch{}
 }
 
+// LOGIN
 app.get('/login',(req,res)=>res.redirect(kite.getLoginURL()));
 
 app.get('/redirect', async(req,res)=>{
@@ -50,6 +60,7 @@ app.get('/redirect', async(req,res)=>{
   }
 });
 
+// CAPITAL
 async function updateCapital(){
   try{
     const m = await kite.getMargins();
@@ -57,8 +68,15 @@ async function updateCapital(){
   }catch{}
 }
 
-const universe = ["NSE:RELIANCE","NSE:TCS","NSE:INFY","NSE:HDFCBANK","NSE:ICICIBANK"];
+// UNIVERSE
+const universe = [
+"NSE:RELIANCE","NSE:TCS","NSE:INFY","NSE:HDFCBANK","NSE:ICICIBANK",
+"NSE:SBIN","NSE:AXISBANK","NSE:KOTAKBANK","NSE:ITC","NSE:LT",
+"NSE:WIPRO","NSE:ULTRACEMCO","NSE:MARUTI","NSE:BAJFINANCE","NSE:ASIANPAINT",
+"NSE:HCLTECH","NSE:TECHM","NSE:TITAN","NSE:ADANIENT","NSE:ADANIPORTS"
+];
 
+// ATR
 function calculateATR(q){
   const h = q.ohlc.high;
   const l = q.ohlc.low;
@@ -66,29 +84,61 @@ function calculateATR(q){
   return Math.max(h-l, Math.abs(h-c), Math.abs(l-c));
 }
 
+// POSITION SIZE
 function getQty(price, atr){
   const risk = state.capital * 0.01;
   if(atr <= 0) return 1;
   return Math.max(1, Math.floor(risk / atr));
 }
 
+// SCORING (LEARNING BASED)
 function score(q){
   const p = q.last_price;
   const o = q.ohlc.open;
   const h = q.ohlc.high;
   const l = q.ohlc.low;
+  const v = q.volume_traded || q.volume || 1;
 
   if(!p || !o || !h || !l) return 0;
 
-  return (p - o)/o + (p - l)/(h - l + 0.0001);
+  const trend = (p - o) / o;
+  const strength = (p - l) / (h - l + 0.0001);
+  const volatility = (h - l) / o;
+  const volume = Math.log(v + 1);
+
+  return (
+    trend * weights.trend +
+    strength * weights.strength +
+    volatility * weights.volatility +
+    volume * weights.volume
+  );
 }
 
+// LEARNING ENGINE
+function updateWeights(trade){
+  const lr = 0.01;
+
+  if(trade.pnl > 0){
+    weights.trend += lr;
+    weights.strength += lr;
+  } else {
+    weights.volatility += lr;
+  }
+
+  // normalize
+  const sum = weights.trend + weights.strength + weights.volatility + weights.volume;
+  Object.keys(weights).forEach(k => weights[k] /= sum);
+}
+
+// MAIN LOOP
 setInterval(async()=>{
   try{
     if(!accessToken) return;
 
     await updateCapital();
     const quotes = await kite.getQuote(universe);
+
+    const buffer = 0.5;
 
     // EXIT LOGIC
     for (let trade of state.activeTrades) {
@@ -97,21 +147,32 @@ setInterval(async()=>{
 
       trade.price = q.last_price;
 
-      if (trade.price >= trade.target || trade.price <= trade.sl) {
-        state.closedTrades.push({
+      if (!trade.closed && (
+        trade.price >= (trade.target - buffer) ||
+        trade.price <= (trade.sl + buffer)
+      )) {
+        trade.closed = true;
+
+        const pnl = (trade.price - trade.entry) * trade.qty;
+
+        const closed = {
           ...trade,
           exit: trade.price,
-          pnl: (trade.price - trade.entry) * trade.qty
-        });
+          pnl
+        };
+
+        state.closedTrades.push(closed);
+        updateWeights(closed);
       }
     }
 
-    state.activeTrades = state.activeTrades.filter(t =>
-      !state.closedTrades.find(c => c.startTime === t.startTime)
-    );
+    // REMOVE CLOSED
+    state.activeTrades = state.activeTrades.filter(t => !t.closed);
 
+    // UPDATE PNL
     state.pnl = state.closedTrades.reduce((sum, t) => sum + t.pnl, 0);
 
+    // SIGNALS
     let signals = [];
     for(const sym of universe){
       const q = quotes[sym];
@@ -119,23 +180,31 @@ setInterval(async()=>{
 
       const atr = calculateATR(q);
 
-      signals.push({symbol:sym, price:q.last_price, score:score(q), atr});
+      signals.push({
+        symbol:sym,
+        price:q.last_price,
+        score:score(q),
+        atr
+      });
     }
 
     signals.sort((a,b)=>b.score-a.score);
-    state.rankedSignals = signals.slice(0,3);
+    state.rankedSignals = signals.slice(0,5);
 
-    // FORCE TEST MODE (VERY CLOSE SL/TARGET)
+    // ADD TRADES
     for(const s of state.rankedSignals){
       if(state.activeTrades.find(t=>t.symbol===s.symbol)) continue;
+      if(state.activeTrades.length >= 5) break;
+
+      const qty = getQty(s.price, s.atr);
 
       state.activeTrades.push({
         symbol:s.symbol,
         entry:s.price,
         price:s.price,
-        qty:1,
-        sl:s.price - 1,
-        target:s.price + 1,
+        qty,
+        sl:s.price - s.atr,
+        target:s.price + s.atr*2,
         startTime:Date.now()
       });
     }
@@ -143,9 +212,10 @@ setInterval(async()=>{
   }catch(e){
     console.log("ERR", e.message);
   }
-},3000);
+},5000);
 
-app.get('/',(req,res)=>res.json(state));
-app.get('/performance',(req,res)=>res.json(state));
+// ROUTES
+app.get('/',(req,res)=>res.json({...state, weights}));
+app.get('/performance',(req,res)=>res.json({...state, weights}));
 
-app.listen(PORT, ()=>console.log("FORCE TEST MODE RUNNING"));
+app.listen(PORT, ()=>console.log("V39 LEARNING RUNNING"));
