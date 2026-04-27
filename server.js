@@ -9,6 +9,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 const LIVE = process.env.LIVE_TRADING === "true";
+const FORCE_PAPER = process.env.FORCE_PAPER === "true";
 const TOKEN_FILE = "access_token.json";
 
 let kite = new KiteConnect({ api_key: process.env.KITE_API_KEY });
@@ -22,33 +23,41 @@ let state = {
   rankedSignals: [],
   activeTrades: [],
   closedTrades: [],
-  mode: LIVE ? "LIVE" : "PAPER"
+  mode: FORCE_PAPER ? "PAPER" : (LIVE ? "LIVE" : "PAPER")
 };
 
 // load token
 if (fs.existsSync(TOKEN_FILE)) {
-  const saved = JSON.parse(fs.readFileSync(TOKEN_FILE));
-  accessToken = saved.token;
-  kite.setAccessToken(accessToken);
+  try {
+    const saved = JSON.parse(fs.readFileSync(TOKEN_FILE));
+    accessToken = saved.token;
+    kite.setAccessToken(accessToken);
+  } catch {}
 }
 
 // login
 app.get('/login', (req,res)=>res.redirect(kite.getLoginURL()));
 
 app.get('/redirect', async (req,res)=>{
-  const session = await kite.generateSession(req.query.request_token, process.env.KITE_API_SECRET);
-  accessToken = session.access_token;
-  kite.setAccessToken(accessToken);
-  fs.writeFileSync(TOKEN_FILE, JSON.stringify({token:accessToken}));
+  try{
+    const session = await kite.generateSession(req.query.request_token, process.env.KITE_API_SECRET);
+    accessToken = session.access_token;
+    kite.setAccessToken(accessToken);
+    fs.writeFileSync(TOKEN_FILE, JSON.stringify({token:accessToken}));
 
-  const ip = await axios.get("https://api.ipify.org?format=json");
-  state.serverIP = ip.data.ip;
+    const ip = await axios.get("https://api.ipify.org?format=json");
+    state.serverIP = ip.data.ip;
 
-  res.send("Login success | IP: " + ip.data.ip);
+    res.send("Login success | IP: " + ip.data.ip);
+  }catch{
+    res.send("Login failed");
+  }
 });
 
-// capital fix
+// capital
 async function updateCapital(){
+  if(FORCE_PAPER) return;
+
   try{
     const m = await kite.getMargins();
     console.log("MARGIN RAW:", JSON.stringify(m));
@@ -75,8 +84,10 @@ const universe = [
 async function getQuotes(symbols){
   let result = {};
   for(let i=0;i<symbols.length;i+=50){
-    const q = await kite.getQuote(symbols.slice(i,i+50));
-    result = {...result,...q};
+    try{
+      const q = await kite.getQuote(symbols.slice(i,i+50));
+      result = {...result,...q};
+    }catch{}
   }
   return result;
 }
@@ -88,20 +99,41 @@ function score(q){
   return ((p-o)/o)+((p-l)/(h-l+0.0001));
 }
 
-// allocation engine
-function allocateCapital(signals){
-  const perTrade = state.capital * 0.2; // 20% each
-  return signals.map(s=>({
-    ...s,
-    qty: Math.max(1, Math.floor(perTrade / s.price))
-  }));
+// SAFE allocation
+function allocate(signals){
+  const riskPerTrade = state.capital * 0.01;
+  const maxExposure = state.capital * 0.5;
+
+  let used = 0;
+  let output = [];
+
+  for(const s of signals){
+    const stopDistance = s.price * 0.01;
+    let qty = Math.floor(riskPerTrade / stopDistance);
+
+    if(qty <= 0) qty = 1;
+
+    const exposure = qty * s.price;
+
+    if(used + exposure > maxExposure) continue;
+
+    used += exposure;
+
+    output.push({
+      ...s,
+      qty
+    });
+  }
+
+  return output;
 }
 
 // loop
 setInterval(async ()=>{
-  if(!accessToken) return;
+  if(!accessToken && !FORCE_PAPER) return;
 
   await updateCapital();
+
   const quotes = await getQuotes(universe);
 
   let signals=[];
@@ -112,9 +144,9 @@ setInterval(async ()=>{
   }
 
   signals.sort((a,b)=>b.score-a.score);
-  const top = signals.slice(0,5);
 
-  const allocated = allocateCapital(top);
+  const top = signals.slice(0,10); // wider pool
+  const allocated = allocate(top).slice(0,5);
 
   state.rankedSignals = allocated;
 
@@ -137,7 +169,7 @@ setInterval(async ()=>{
 // api
 app.get('/performance',(req,res)=>res.json(state));
 
-// UI auto refresh
+// UI
 app.get('/',(req,res)=>{
   res.send(`
   <html>
@@ -151,10 +183,10 @@ app.get('/',(req,res)=>{
   window.onload=load;
   </script>
   <body style="background:black;color:#0f0;font-family:monospace">
-  <h2>V44 Portfolio Engine</h2>
+  <h2>V45 SAFE ENGINE</h2>
   <pre id="d"></pre>
   </body></html>
   `);
 });
 
-app.listen(PORT,()=>console.log("V44 RUNNING"));
+app.listen(PORT,()=>console.log("V45 SAFE RUNNING"));
