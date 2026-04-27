@@ -1,3 +1,4 @@
+
 require('dotenv').config();
 const express = require('express');
 const fs = require('fs');
@@ -56,7 +57,7 @@ async function updateCapital(){
   }catch{}
 }
 
-const universe = ["NSE:RELIANCE","NSE:TCS","NSE:INFY","NSE:HDFCBANK","NSE:ICICIBANK","NSE:SBIN","NSE:AXISBANK","NSE:KOTAKBANK","NSE:ITC","NSE:LT"];
+const universe = ["NSE:RELIANCE","NSE:TCS","NSE:INFY","NSE:HDFCBANK","NSE:ICICIBANK"];
 
 function calculateATR(q){
   const h = q.ohlc.high;
@@ -76,16 +77,10 @@ function score(q){
   const o = q.ohlc.open;
   const h = q.ohlc.high;
   const l = q.ohlc.low;
-  const v = q.volume_traded || q.volume || 1;
 
   if(!p || !o || !h || !l) return 0;
 
-  const trend = (p - o) / o;
-  const strength = (p - l) / (h - l + 0.0001);
-  const volatility = (h - l) / o;
-  const volume = Math.log(v + 1);
-
-  return trend*0.3 + strength*0.3 + volatility*0.2 + volume*0.2;
+  return (p - o)/o + (p - l)/(h - l + 0.0001);
 }
 
 setInterval(async()=>{
@@ -95,16 +90,19 @@ setInterval(async()=>{
     await updateCapital();
     const quotes = await kite.getQuote(universe);
 
+    // EXIT LOGIC
     for (let trade of state.activeTrades) {
       const q = quotes[trade.symbol];
       if (!q) continue;
 
       trade.price = q.last_price;
 
-      if (trade.price >= trade.target) {
-        state.closedTrades.push({...trade, exit: trade.price, result: "WIN", pnl: (trade.price - trade.entry) * trade.qty});
-      } else if (trade.price <= trade.sl) {
-        state.closedTrades.push({...trade, exit: trade.price, result: "LOSS", pnl: (trade.price - trade.entry) * trade.qty});
+      if (trade.price >= trade.target || trade.price <= trade.sl) {
+        state.closedTrades.push({
+          ...trade,
+          exit: trade.price,
+          pnl: (trade.price - trade.entry) * trade.qty
+        });
       }
     }
 
@@ -125,21 +123,19 @@ setInterval(async()=>{
     }
 
     signals.sort((a,b)=>b.score-a.score);
-    state.rankedSignals = signals.slice(0,5);
+    state.rankedSignals = signals.slice(0,3);
 
+    // FORCE TEST MODE (VERY CLOSE SL/TARGET)
     for(const s of state.rankedSignals){
       if(state.activeTrades.find(t=>t.symbol===s.symbol)) continue;
-      if(state.activeTrades.length >= 5) break;
-
-      const qty = getQty(s.price, s.atr);
 
       state.activeTrades.push({
         symbol:s.symbol,
         entry:s.price,
         price:s.price,
-        qty,
-        sl:s.price - s.atr,
-        target:s.price + s.atr*2,
+        qty:1,
+        sl:s.price - 1,
+        target:s.price + 1,
         startTime:Date.now()
       });
     }
@@ -147,9 +143,9 @@ setInterval(async()=>{
   }catch(e){
     console.log("ERR", e.message);
   }
-},5000);
+},3000);
 
 app.get('/',(req,res)=>res.json(state));
 app.get('/performance',(req,res)=>res.json(state));
 
-app.listen(PORT, ()=>console.log("V38 RUNNING"));
+app.listen(PORT, ()=>console.log("FORCE TEST MODE RUNNING"));
