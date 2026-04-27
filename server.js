@@ -43,41 +43,34 @@ app.get('/redirect', async (req,res)=>{
   }
 });
 
-// ===== CAPITAL FIX =====
+// ===== CAPITAL (STRICT) =====
 async function updateCapital(){
   try{
     const margins = await kite.getMargins();
     const cash = margins?.equity?.available?.cash;
 
+    console.log("RAW MARGINS:", JSON.stringify(margins));
+
     if(cash && cash > 0){
       state.capital = cash;
       state.peakCapital = Math.max(state.peakCapital, cash);
-    }else{
-      // fallback
-      state.capital = 100000;
-      state.peakCapital = 100000;
     }
-
   }catch(e){
     console.log("CAPITAL ERROR:", e.message);
-    state.capital = 100000;
   }
 }
 
-// ===== 200 STOCK UNIVERSE =====
+// ===== REAL UNIQUE NSE LIST =====
 const universe = [
 "NSE:RELIANCE","NSE:TCS","NSE:INFY","NSE:HDFCBANK","NSE:ICICIBANK",
 "NSE:SBIN","NSE:AXISBANK","NSE:KOTAKBANK","NSE:ITC","NSE:LT",
 "NSE:WIPRO","NSE:ULTRACEMCO","NSE:MARUTI","NSE:BAJFINANCE","NSE:ASIANPAINT",
 "NSE:HCLTECH","NSE:TECHM","NSE:TITAN","NSE:ADANIENT","NSE:ADANIPORTS",
 "NSE:ONGC","NSE:NTPC","NSE:POWERGRID","NSE:TATASTEEL","NSE:HINDALCO",
-
-// duplicated blocks to simulate 200+ (expandable real list)
-"NSE:RELIANCE","NSE:TCS","NSE:INFY","NSE:HDFCBANK","NSE:ICICIBANK",
-"NSE:SBIN","NSE:AXISBANK","NSE:KOTAKBANK","NSE:ITC","NSE:LT",
-"NSE:WIPRO","NSE:ULTRACEMCO","NSE:MARUTI","NSE:BAJFINANCE","NSE:ASIANPAINT",
-"NSE:HCLTECH","NSE:TECHM","NSE:TITAN","NSE:ADANIENT","NSE:ADANIPORTS",
-"NSE:ONGC","NSE:NTPC","NSE:POWERGRID","NSE:TATASTEEL","NSE:HINDALCO"
+"NSE:COALINDIA","NSE:BPCL","NSE:BRITANNIA","NSE:CIPLA","NSE:DIVISLAB",
+"NSE:DRREDDY","NSE:EICHERMOT","NSE:GRASIM","NSE:HDFCLIFE","NSE:HEROMOTOCO",
+"NSE:INDUSINDBK","NSE:JSWSTEEL","NSE:M&M","NSE:NESTLEIND","NSE:SHREECEM",
+"NSE:SBILIFE","NSE:UPL","NSE:BAJAJFINSV","NSE:TATAMOTORS","NSE:ICICIPRULI"
 ];
 
 // ===== QUOTES =====
@@ -97,7 +90,8 @@ async function getQuotes(){
 // ===== SCORING =====
 function score(q){
   const p=q.last_price,o=q.ohlc.open,h=q.ohlc.high,l=q.ohlc.low;
-  if(!p||!o||!h||!l) return 0;
+  if(!p||!o||!h||!l) return -999;
+
   return ((p-o)/o) + ((p-l)/(h-l+0.0001));
 }
 
@@ -122,16 +116,23 @@ setInterval(async ()=>{
     });
   }
 
+  // remove invalid
+  signals = signals.filter(s => s.score > -1);
+
+  // SORT
   signals.sort((a,b)=>b.score-a.score);
 
-  let top = signals.slice(0,10);
+  // REMOVE DUPLICATES (extra safety)
+  const seen = new Set();
+  const unique = signals.filter(s=>{
+    if(seen.has(s.symbol)) return false;
+    seen.add(s.symbol);
+    return true;
+  });
 
-  // fallback
-  if(top.length === 0){
-    top = signals.slice(0,5);
-  }
+  state.rankedSignals = unique.slice(0,5);
 
-  state.rankedSignals = top.slice(0,5);
+  console.log("FINAL SIGNALS:", state.rankedSignals);
 
 },5000);
 
@@ -152,10 +153,10 @@ app.get('/',(req,res)=>{
   window.onload=load;
   </script>
   <body style="background:black;color:#0f0;font-family:monospace">
-  <h2>V48 FULL FIX</h2>
+  <h2>V49 CLEAN ENGINE</h2>
   <pre id="d"></pre>
   </body></html>
   `);
 });
 
-app.listen(PORT,()=>console.log("V48 RUNNING"));
+app.listen(PORT,()=>console.log("V49 RUNNING"));
