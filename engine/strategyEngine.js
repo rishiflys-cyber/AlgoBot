@@ -2,9 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const KiteConnect = require("kiteconnect").KiteConnect;
 
-const kc = new KiteConnect({
-    api_key: process.env.API_KEY
-});
+const kc = new KiteConnect({ api_key: process.env.API_KEY });
 
 const accessToken = fs.readFileSync(path.join(__dirname, "../access_token.txt"), "utf8").trim();
 kc.setAccessToken(accessToken);
@@ -15,7 +13,6 @@ async function getHistorical(token) {
     try {
         const to = new Date();
         const from = new Date(to.getTime() - (60 * 60 * 1000));
-
         return await kc.getHistoricalData(token, from, to, "5minute");
     } catch {
         return [];
@@ -40,7 +37,7 @@ function volatile(c) {
     return ((x.high - x.low) / x.close) > 0.003;
 }
 
-async function generateSignals(capital) {
+async function runStrategy(capital) {
     if (capital < 5000) return [];
 
     const results = [];
@@ -65,4 +62,4 @@ async function generateSignals(capital) {
     return results.slice(0, 10);
 }
 
-module.exports = { generateSignals };
+module.exports = { runStrategy, generateSignals: runStrategy };
