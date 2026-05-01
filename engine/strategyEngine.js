@@ -56,10 +56,11 @@ async function generateSignals(capital) {
                     score: 10
                 });
             }
-        } catch (e) {}
+        } catch {}
     }
 
     return results.slice(0, 10);
 }
 
-module.exports = { generateSignals };
+module.exports = generateSignals;
+module.exports.generateSignals = generateSignals;
