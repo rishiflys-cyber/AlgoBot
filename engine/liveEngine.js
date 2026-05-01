@@ -5,7 +5,6 @@ let activeTrades = [];
 async function runLiveEngine(capital){
     const signals = await (strategy.generateSignals || strategy)(capital);
 
-    // CLEAR OLD (simple reset each run)
     activeTrades = [];
 
     for(let s of signals){
