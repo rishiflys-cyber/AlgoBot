@@ -4,7 +4,7 @@ const strategy = require("./strategyEngine");
 const kc = new KiteConnect({ api_key: process.env.API_KEY });
 kc.setAccessToken(process.env.ACCESS_TOKEN);
 
-// IST TIME CHECK
+// IST TIME
 function isMarketOpen(){
     const now = new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
     const d = new Date(now);
@@ -22,12 +22,13 @@ async function runLiveEngine(capital){
     for(let s of signals){
         try{
             const entry = s.price;
-            const sl = entry * 0.98;
-            const target = entry * 1.02;
+            const sl = parseFloat((entry * 0.98).toFixed(2));
+            const target = parseFloat((entry * 1.02).toFixed(2));
 
-            const qty = Math.max(1, Math.floor((capital*0.01)/(entry-sl)));
+            const risk = capital * 0.01;
+            const qty = Math.max(1, Math.floor(risk / (entry - sl)));
 
-            const order = await kc.placeOrder("regular", {
+            const buy = await kc.placeOrder("regular", {
                 exchange: "NSE",
                 tradingsymbol: s.symbol,
                 transaction_type: "BUY",
@@ -37,6 +38,26 @@ async function runLiveEngine(capital){
                 price: entry
             });
 
+            const slOrder = await kc.placeOrder("regular", {
+                exchange: "NSE",
+                tradingsymbol: s.symbol,
+                transaction_type: "SELL",
+                quantity: qty,
+                product: "MIS",
+                order_type: "SL-M",
+                trigger_price: sl
+            });
+
+            const targetOrder = await kc.placeOrder("regular", {
+                exchange: "NSE",
+                tradingsymbol: s.symbol,
+                transaction_type: "SELL",
+                quantity: qty,
+                product: "MIS",
+                order_type: "LIMIT",
+                price: target
+            });
+
             trades.push({
                 symbol:s.symbol,
                 qty,
@@ -44,7 +65,9 @@ async function runLiveEngine(capital){
                 sl,
                 target,
                 score:s.score,
-                status:"PLACED"
+                status:"PLACED",
+                sl_order: slOrder.order_id,
+                target_order: targetOrder.order_id
             });
 
         }catch(e){

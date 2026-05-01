@@ -15,7 +15,6 @@ exports.generateSignals = async function(kc){
         const low = q.ohlc.low;
         const volume = q.volume;
 
-        // AI SCORE (simple weighted logic)
         let score = 0;
 
         if(ltp > open) score += 1;

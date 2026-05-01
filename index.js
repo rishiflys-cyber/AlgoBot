@@ -30,14 +30,14 @@ app.get("/redirect", async (req,res)=>{
 const runLiveEngine = require("./engine/liveEngine");
 
 app.get("/", (req,res)=>{
-    res.send("AlgoBot V67 AI + BACKTEST LIVE");
+    res.send("AlgoBot V68 FULL AUTOPILOT LIVE");
 });
 
 app.get("/performance", async (req,res)=>{
     try{
         const capital = 8491.8;
         const activeTrades = await runLiveEngine(capital);
-        res.json({ capital, activeTrades, mode:"AI_BACKTEST" });
+        res.json({ capital, activeTrades, mode:"FULL_AUTOPILOT" });
     }catch(e){
         res.json({error:e.message});
     }
