@@ -4,7 +4,23 @@ const strategy = require("./strategyEngine");
 const kc = new KiteConnect({ api_key: process.env.API_KEY });
 kc.setAccessToken(process.env.ACCESS_TOKEN);
 
+function isMarketOpen(){
+    const now = new Date();
+    const hours = now.getHours();
+    const mins = now.getMinutes();
+    const time = hours*60 + mins;
+
+    const start = 9*60 + 15;
+    const end = 15*60 + 25;
+
+    return time >= start && time <= end;
+}
+
 async function runLiveEngine(capital){
+    if(!isMarketOpen()){
+        return [{status:"MARKET_CLOSED"}];
+    }
+
     const signals = await (strategy.generateSignals || strategy)(capital);
     const trades = [];
 
