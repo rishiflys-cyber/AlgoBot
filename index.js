@@ -1,6 +1,5 @@
 const express = require("express");
 const { KiteConnect } = require("kiteconnect");
-const fs = require("fs");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -10,32 +9,28 @@ const apiSecret = process.env.API_SECRET;
 
 const kc = new KiteConnect({ api_key: apiKey });
 
-// LOGIN ROUTE
-app.get("/login", (req, res) => {
-    const loginUrl = kc.getLoginURL();
-    res.redirect(loginUrl);
+// LOGIN
+app.get("/login", (req,res)=>{
+    res.redirect(kc.getLoginURL());
 });
 
-// REDIRECT ROUTE
-app.get("/redirect", async (req, res) => {
-    try {
+// REDIRECT (SHOW TOKEN)
+app.get("/redirect", async (req,res)=>{
+    try{
         const requestToken = req.query.request_token;
-
         const response = await kc.generateSession(requestToken, apiSecret);
         const accessToken = response.access_token;
 
-        fs.writeFileSync("access_token.txt", accessToken);
-
-        res.send("Login success. Go to /performance");
-    } catch (e) {
-        res.send("Login failed: " + e.message);
+        res.send("ACCESS_TOKEN: " + accessToken);
+    }catch(e){
+        res.send(e.message);
     }
 });
 
 const runLiveEngine = require("./engine/liveEngine");
 
 app.get("/", (req,res)=>{
-    res.send("AlgoBot LOGIN FIX LIVE");
+    res.send("AlgoBot TOKEN FIX LIVE");
 });
 
 app.get("/performance", async (req,res)=>{
