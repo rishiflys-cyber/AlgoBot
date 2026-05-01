@@ -17,14 +17,14 @@ async function runLiveEngine(capital){
     if(!isMarketOpen()) return [{status:"MARKET_CLOSED_IST"}];
 
     const signals = await strategy.generateSignals(kc);
-    const trades = [];
 
     let log = [];
-    try{
-        log = JSON.parse(fs.readFileSync("./data/trades.json"));
-    }catch{}
+    try{ log = JSON.parse(fs.readFileSync("./data/trades.json")); }catch{}
+
+    const trades = [];
 
     for(let s of signals){
+
         try{
             const entry = s.price;
             const sl = entry * 0.98;
@@ -32,7 +32,7 @@ async function runLiveEngine(capital){
 
             const qty = Math.max(1, Math.floor((capital*0.01)/(entry-sl)));
 
-            await kc.placeOrder("regular", {
+            const order = await kc.placeOrder("regular", {
                 exchange: "NSE",
                 tradingsymbol: s.symbol,
                 transaction_type: "BUY",
@@ -42,20 +42,22 @@ async function runLiveEngine(capital){
                 price: entry
             });
 
-            const pnl = (Math.random()*2 -1) * 100;
-
-            const tradeData = {
-                symbol:s.symbol,
-                entry,
+            const trade = {
+                symbol: s.symbol,
                 qty,
-                pnl,
-                time: new Date().toISOString()
+                entry,
+                sl,
+                target,
+                order_id: order.order_id,
+                time: new Date().toISOString(),
+                pnl: 0,
+                status: "LIVE"
             };
 
-            log.push(tradeData);
+            log.push(trade);
             fs.writeFileSync("./data/trades.json", JSON.stringify(log,null,2));
 
-            trades.push({...tradeData,status:"RECORDED"});
+            trades.push(trade);
 
         }catch(e){
             trades.push({symbol:s.symbol,status:"FAILED",reason:e.message});
