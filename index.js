@@ -14,11 +14,7 @@ app.get("/redirect", async (req,res)=>{
     try{
         const requestToken = req.query.request_token;
         const session = await kc.generateSession(requestToken, process.env.API_SECRET);
-
-        const accessToken = session.access_token;
-        const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-
-        res.send("ACCESS_TOKEN: " + accessToken + "<br>IP: " + ip);
+        res.send("ACCESS_TOKEN: " + session.access_token);
     }catch(e){
         res.send(e.message);
     }
@@ -27,14 +23,14 @@ app.get("/redirect", async (req,res)=>{
 const runLiveEngine = require("./engine/liveEngine");
 
 app.get("/", (req,res)=>{
-    res.send("AlgoBot V64 IP SHOW LIVE");
+    res.send("AlgoBot V65 SMART FILTER LIVE");
 });
 
 app.get("/performance", async (req,res)=>{
     try{
         const capital = 8491.8;
         const activeTrades = await runLiveEngine(capital);
-        res.json({ capital, activeTrades, mode:"INTRADAY_TIMER" });
+        res.json({ capital, activeTrades, mode:"SMART_FILTER" });
     }catch(e){
         res.json({error:e.message});
     }
