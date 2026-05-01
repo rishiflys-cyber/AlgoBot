@@ -1,9 +1,9 @@
 const strategy = require("./strategyEngine");
 
-async function run(capital) {
+async function runLiveEngine(capital){
     const fn = strategy.generateSignals || strategy;
-    const signals = await fn(capital);
-    return signals;
+    return await fn(capital);
 }
 
-module.exports = { run };
+module.exports = runLiveEngine;
+module.exports.runLiveEngine = runLiveEngine;
