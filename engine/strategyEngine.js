@@ -45,7 +45,7 @@ async function generateSignals(capital) {
     for (let s of symbols) {
         try {
             const candles = await getHistorical(s.instrument_token);
-            if (candles.length < 5) continue;
+            if (!candles || candles.length < 5) continue;
 
             const last = candles[candles.length - 1];
 
@@ -56,11 +56,10 @@ async function generateSignals(capital) {
                     score: 10
                 });
             }
-        } catch {}
+        } catch (e) {}
     }
 
     return results.slice(0, 10);
 }
 
-// CRITICAL: export EXACT function name
-module.exports.generateSignals = generateSignals;
+module.exports = { generateSignals };
