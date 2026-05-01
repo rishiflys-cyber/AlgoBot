@@ -14,7 +14,11 @@ app.get("/redirect", async (req,res)=>{
     try{
         const requestToken = req.query.request_token;
         const session = await kc.generateSession(requestToken, process.env.API_SECRET);
-        res.send("ACCESS_TOKEN: " + session.access_token);
+
+        const accessToken = session.access_token;
+        const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+
+        res.send("ACCESS_TOKEN: " + accessToken + "<br>IP: " + ip);
     }catch(e){
         res.send(e.message);
     }
@@ -23,7 +27,7 @@ app.get("/redirect", async (req,res)=>{
 const runLiveEngine = require("./engine/liveEngine");
 
 app.get("/", (req,res)=>{
-    res.send("AlgoBot V64 TIMER LIVE");
+    res.send("AlgoBot V64 IP SHOW LIVE");
 });
 
 app.get("/performance", async (req,res)=>{
