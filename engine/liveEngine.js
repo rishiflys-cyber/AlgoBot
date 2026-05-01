@@ -6,10 +6,8 @@ async function runLiveEngine(capital){
     const activeTrades = [];
 
     for(let s of signals){
-        if(!s.symbol) continue;
-
         activeTrades.push({
-            symbol: s.symbol,
+            symbol: s.symbol || "UNKNOWN",
             entry: s.price,
             qty: 1,
             status: "OPEN"

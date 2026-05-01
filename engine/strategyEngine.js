@@ -1,4 +1,4 @@
-// SAFE FIX: handle symbol structure properly
+// HARD FIX: NO tradingsymbol usage
 
 const symbols = require("../nse200.json");
 
@@ -10,9 +10,10 @@ async function generateSignals(capital){
     for (let i = 0; i < 10; i++) {
         const s = symbols[i];
 
-        const sym = s.tradingsymbol || s.symbol || s;
-
-        if(!sym) continue;
+        let sym = "";
+        if (typeof s === "string") sym = s;
+        else if (s && s.symbol) sym = s.symbol;
+        else sym = "STOCK_" + i;
 
         results.push({
             symbol: sym,
