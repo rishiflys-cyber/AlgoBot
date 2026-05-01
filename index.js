@@ -1,13 +1,12 @@
 const express = require("express");
-const fs = require("fs");
-const KiteConnect = require("kiteconnect").KiteConnect;
-
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 const runLiveEngine = require("./engine/liveEngine");
 
-const kc = new KiteConnect({ api_key: process.env.API_KEY });
+app.get("/", (req,res)=>{
+    res.send("AlgoBot LIVE");
+});
 
 app.get("/performance", async (req,res)=>{
     try{
