@@ -2,9 +2,9 @@ const KiteConnect = require("kiteconnect").KiteConnect;
 const strategy = require("./strategyEngine");
 
 const kc = new KiteConnect({ api_key: process.env.API_KEY });
+kc.setAccessToken(process.env.ACCESS_TOKEN);
 
-const accessToken = process.env.ACCESS_TOKEN;
-if(accessToken) kc.setAccessToken(accessToken);
+let positions = [];
 
 async function runLiveEngine(capital){
     const signals = await (strategy.generateSignals || strategy)(capital);
@@ -12,21 +12,36 @@ async function runLiveEngine(capital){
 
     for(let s of signals){
         try{
-            const symbol = (s.symbol || "").replace("NSE:", "");
+            const symbol = s.symbol;
 
-            const order = await kc.placeOrder("regular", {
+            const order = await kc.placeOrder("amo", {
                 exchange: "NSE",
                 tradingsymbol: symbol,
                 transaction_type: "BUY",
                 quantity: 1,
-                product: "MIS",
+                product: "CNC",
                 order_type: "MARKET"
             });
 
-            trades.push({symbol, order_id: order.order_id, status:"PLACED"});
+            const trade = {
+                symbol,
+                entry: s.price,
+                qty: 1,
+                stoploss: s.price * 0.98,
+                target: s.price * 1.02,
+                order_id: order.order_id,
+                status: "OPEN"
+            };
+
+            positions.push(trade);
+            trades.push(trade);
 
         }catch(e){
-            trades.push({symbol:s.symbol, status:"FAILED", reason:e.message});
+            trades.push({
+                symbol: s.symbol,
+                status: "FAILED",
+                reason: e.message
+            });
         }
     }
 
