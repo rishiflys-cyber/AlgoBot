@@ -23,14 +23,14 @@ app.get("/redirect", async (req,res)=>{
 const runLiveEngine = require("./engine/liveEngine");
 
 app.get("/", (req,res)=>{
-    res.send("AlgoBot V62 INTRADAY LIVE");
+    res.send("AlgoBot V63 OCO LIVE");
 });
 
 app.get("/performance", async (req,res)=>{
     try{
         const capital = 8491.8;
         const activeTrades = await runLiveEngine(capital);
-        res.json({ capital, activeTrades, mode:"INTRADAY" });
+        res.json({ capital, activeTrades, mode:"INTRADAY_OCO" });
     }catch(e){
         res.json({error:e.message});
     }
