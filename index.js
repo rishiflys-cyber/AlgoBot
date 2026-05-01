@@ -5,7 +5,7 @@ const PORT = process.env.PORT || 3000;
 const runLiveEngine = require("./engine/liveEngine");
 
 app.get("/", (req,res)=>{
-    res.send("AlgoBot LIVE");
+    res.send("AlgoBot V57 AGGRESSIVE LIVE");
 });
 
 app.get("/performance", async (req,res)=>{
