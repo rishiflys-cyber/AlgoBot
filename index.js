@@ -14,7 +14,14 @@ app.get("/redirect", async (req,res)=>{
     try{
         const requestToken = req.query.request_token;
         const session = await kc.generateSession(requestToken, process.env.API_SECRET);
-        res.send("ACCESS_TOKEN: " + session.access_token);
+
+        const accessToken = session.access_token;
+
+        const forwarded = req.headers['x-forwarded-for'];
+        const realIp = forwarded ? forwarded.split(',')[0] : req.socket.remoteAddress;
+
+        res.send("ACCESS_TOKEN: " + accessToken + "<br>IP: " + realIp);
+
     }catch(e){
         res.send(e.message);
     }
@@ -23,7 +30,7 @@ app.get("/redirect", async (req,res)=>{
 const runLiveEngine = require("./engine/liveEngine");
 
 app.get("/", (req,res)=>{
-    res.send("AlgoBot V65 SMART FILTER LIVE");
+    res.send("AlgoBot V65 IP FIX LIVE");
 });
 
 app.get("/performance", async (req,res)=>{
