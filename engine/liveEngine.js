@@ -13,7 +13,7 @@ async function runLiveEngine(stocks, capital, kc) {
     const sl = stock.price * 0.98;
 
     const qty = Math.floor(riskAmount / (stock.price - sl));
-    if (qty <= 0) continue;
+    const finalQty = qty > 0 ? qty : 1;
 
     try {
       await kc.placeOrder("regular", {
