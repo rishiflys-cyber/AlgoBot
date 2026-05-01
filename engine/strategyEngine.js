@@ -21,91 +21,51 @@ async function getHistorical(token) {
 
 function ema(values, period){
     const k = 2/(period+1);
-    let emaArr = [values[0]];
+    let e=[values[0]];
     for(let i=1;i<values.length;i++){
-        emaArr.push(values[i]*k + emaArr[i-1]*(1-k));
+        e.push(values[i]*k + e[i-1]*(1-k));
     }
-    return emaArr;
+    return e;
 }
 
-function momentum(c){
-    return c[c.length-1].close > c[c.length-2].close &&
-           c[c.length-2].close > c[c.length-3].close;
-}
+function bullish(x){ return x.close > x.open; }
 
-function breakout(c){
-    return c[c.length-1].close >= c[c.length-2].high * 0.998;
-}
+function breakout(c){ return c[c.length-1].close >= c[c.length-2].high*0.998; }
 
-function bullish(x){
-    return x.close > x.open;
-}
-
-function volumeSpike(c){
-    let last = c[c.length-1].volume;
-    let avg = c.slice(-6,-1).reduce((a,b)=>a+b.volume,0)/5;
-    return last > avg * 1.3;
-}
-
-// NEW: Pullback logic
-function pullbackEntry(c, ema9){
-    const last = c[c.length-1];
-    const price = last.close;
-    const emaVal = ema9[ema9.length-1];
-
-    return Math.abs(price - emaVal)/price < 0.002; // near EMA
+function pullback(c, ema9){
+    let p=c[c.length-1].close;
+    let e=ema9[ema9.length-1];
+    return Math.abs(p-e)/p < 0.003;
 }
 
 async function generateSignals(capital){
-    if(capital < 5000) return [];
+    if(capital<5000) return [];
 
-    const results=[];
+    let res=[];
 
     for(let s of symbols){
         try{
-            const c = await getHistorical(s.instrument_token);
-            if(!c || c.length < 10) continue;
+            let c=await getHistorical(s.instrument_token);
+            if(!c || c.length<10) continue;
 
-            const closes = c.map(x=>x.close);
-            const ema9 = ema(closes,9);
-            const ema21 = ema(closes,21);
+            let closes=c.map(x=>x.close);
+            let e9=ema(closes,9);
+            let e21=ema(closes,21);
 
-            const last = c[c.length-1];
+            let trend=e9[e9.length-1] > e21[e21.length-1];
+            let last=c[c.length-1];
 
-            const trend = ema9[ema9.length-1] > ema21[ema21.length-1];
-
-            // PRIMARY: breakout
-            if(
-                breakout(c) &&
-                bullish(last) &&
-                momentum(c) &&
-                volumeSpike(c) &&
-                trend
-            ){
-                results.push({
-                    symbol: s.tradingsymbol,
-                    price: last.close,
-                    score: 15
-                });
+            if(trend && bullish(last) && breakout(c)){
+                res.push({symbol:s.tradingsymbol, price:last.close, score:15});
             }
-
-            // SECONDARY: pullback
-            else if(
-                trend &&
-                bullish(last) &&
-                pullbackEntry(c, ema9)
-            ){
-                results.push({
-                    symbol: s.tradingsymbol,
-                    price: last.close,
-                    score: 10
-                });
+            else if(trend && bullish(last) && pullback(c,e9)){
+                res.push({symbol:s.tradingsymbol, price:last.close, score:10});
             }
 
         }catch{}
     }
 
-    return results.slice(0,10);
+    return res.slice(0,10);
 }
 
 module.exports = generateSignals;

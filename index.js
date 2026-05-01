@@ -1,84 +1,22 @@
-require("dotenv").config();
 const express = require("express");
 const fs = require("fs");
-const { KiteConnect } = require("kiteconnect");
-
-const runLiveEngine = require("./engine/liveEngine");
-const generateSignals = require("./engine/strategyEngine");
+const KiteConnect = require("kiteconnect").KiteConnect;
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const kc = new KiteConnect({
-  api_key: process.env.API_KEY,
-});
+const runLiveEngine = require("./engine/liveEngine");
 
-let access_token = null;
+const kc = new KiteConnect({ api_key: process.env.API_KEY });
 
-// HOME
-app.get("/", (req, res) => {
-  res.send(`<h2>AlgoBot LIVE</h2><a href="/login">👉 LOGIN</a>`);
-});
-
-// LOGIN
-app.get("/login", (req, res) => {
-  res.redirect(kc.getLoginURL());
-});
-
-// REDIRECT
-app.get("/redirect", async (req, res) => {
-  try {
-    const request_token = req.query.request_token;
-
-    const session = await kc.generateSession(
-      request_token,
-      process.env.API_SECRET
-    );
-
-    access_token = session.access_token;
-    kc.setAccessToken(access_token);
-
-    fs.writeFileSync("access_token.txt", access_token);
-
-    res.send("✅ Login success. Go to /performance");
-  } catch (err) {
-    res.send("❌ Login failed: " + err.message);
-  }
-});
-
-// PERFORMANCE
-app.get("/performance", async (req, res) => {
-  try {
-    if (!access_token) {
-      if (fs.existsSync("access_token.txt")) {
-        access_token = fs.readFileSync("access_token.txt", "utf-8");
-        kc.setAccessToken(access_token);
-      } else {
-        return res.json({ capital: 0, error: "Login required" });
-      }
+app.get("/performance", async (req,res)=>{
+    try{
+        const capital = 8491.8;
+        const activeTrades = await runLiveEngine(capital);
+        res.json({ capital, activeTrades, mode:"LIVE" });
+    }catch(e){
+        res.json({error:e.message});
     }
-
-    const margins = await kc.getMargins();
-    const capital = margins.equity.available.live_balance;
-
-    const symbols = require("./nse200.json");
-    const signals = generateSignals(symbols);
-
-    let trades = [];
-
-    if (process.env.LIVE_TRADING === "true") {
-      trades = await runLiveEngine(signals, capital, kc);
-    }
-
-    res.json({
-      capital,
-      activeTrades: trades,
-      mode: process.env.LIVE_TRADING === "true" ? "LIVE" : "PAPER",
-    });
-
-  } catch (err) {
-    res.json({ error: err.message });
-  }
 });
 
-app.listen(PORT, () => console.log("🚀 Server running"));
+app.listen(PORT, ()=>console.log("running"));
