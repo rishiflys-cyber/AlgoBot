@@ -1,11 +1,30 @@
 const express = require("express");
+const { KiteConnect } = require("kiteconnect");
+
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+const kc = new KiteConnect({ api_key: process.env.API_KEY });
+
+// LOGIN FIX
+app.get("/login", (req,res)=>{
+    res.redirect(kc.getLoginURL());
+});
+
+app.get("/redirect", async (req,res)=>{
+    try{
+        const requestToken = req.query.request_token;
+        const session = await kc.generateSession(requestToken, process.env.API_SECRET);
+        res.send("ACCESS_TOKEN: " + session.access_token);
+    }catch(e){
+        res.send(e.message);
+    }
+});
 
 const runLiveEngine = require("./engine/liveEngine");
 
 app.get("/", (req,res)=>{
-    res.send("AlgoBot V66 RISK ENGINE LIVE");
+    res.send("AlgoBot V66 LOGIN FIX LIVE");
 });
 
 app.get("/performance", async (req,res)=>{
