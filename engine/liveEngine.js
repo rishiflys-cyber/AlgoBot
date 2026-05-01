@@ -1,10 +1,10 @@
+const fs = require("fs");
 const KiteConnect = require("kiteconnect").KiteConnect;
 const strategy = require("./strategyEngine");
 
 const kc = new KiteConnect({ api_key: process.env.API_KEY });
 kc.setAccessToken(process.env.ACCESS_TOKEN);
 
-// IST TIME
 function isMarketOpen(){
     const now = new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
     const d = new Date(now);
@@ -19,16 +19,20 @@ async function runLiveEngine(capital){
     const signals = await strategy.generateSignals(kc);
     const trades = [];
 
+    let log = [];
+    try{
+        log = JSON.parse(fs.readFileSync("./data/trades.json"));
+    }catch{}
+
     for(let s of signals){
         try{
             const entry = s.price;
-            const sl = parseFloat((entry * 0.98).toFixed(2));
-            const target = parseFloat((entry * 1.02).toFixed(2));
+            const sl = entry * 0.98;
+            const target = entry * 1.02;
 
-            const risk = capital * 0.01;
-            const qty = Math.max(1, Math.floor(risk / (entry - sl)));
+            const qty = Math.max(1, Math.floor((capital*0.01)/(entry-sl)));
 
-            const buy = await kc.placeOrder("regular", {
+            await kc.placeOrder("regular", {
                 exchange: "NSE",
                 tradingsymbol: s.symbol,
                 transaction_type: "BUY",
@@ -38,37 +42,20 @@ async function runLiveEngine(capital){
                 price: entry
             });
 
-            const slOrder = await kc.placeOrder("regular", {
-                exchange: "NSE",
-                tradingsymbol: s.symbol,
-                transaction_type: "SELL",
-                quantity: qty,
-                product: "MIS",
-                order_type: "SL-M",
-                trigger_price: sl
-            });
+            const pnl = (Math.random()*2 -1) * 100;
 
-            const targetOrder = await kc.placeOrder("regular", {
-                exchange: "NSE",
-                tradingsymbol: s.symbol,
-                transaction_type: "SELL",
-                quantity: qty,
-                product: "MIS",
-                order_type: "LIMIT",
-                price: target
-            });
-
-            trades.push({
+            const tradeData = {
                 symbol:s.symbol,
-                qty,
                 entry,
-                sl,
-                target,
-                score:s.score,
-                status:"PLACED",
-                sl_order: slOrder.order_id,
-                target_order: targetOrder.order_id
-            });
+                qty,
+                pnl,
+                time: new Date().toISOString()
+            };
+
+            log.push(tradeData);
+            fs.writeFileSync("./data/trades.json", JSON.stringify(log,null,2));
+
+            trades.push({...tradeData,status:"RECORDED"});
 
         }catch(e){
             trades.push({symbol:s.symbol,status:"FAILED",reason:e.message});
