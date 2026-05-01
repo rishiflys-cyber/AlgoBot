@@ -6,7 +6,7 @@ const PORT = process.env.PORT || 3000;
 
 const kc = new KiteConnect({ api_key: process.env.API_KEY });
 
-// LOGIN FIX
+// LOGIN + IP
 app.get("/login", (req,res)=>{
     res.redirect(kc.getLoginURL());
 });
@@ -15,7 +15,13 @@ app.get("/redirect", async (req,res)=>{
     try{
         const requestToken = req.query.request_token;
         const session = await kc.generateSession(requestToken, process.env.API_SECRET);
-        res.send("ACCESS_TOKEN: " + session.access_token);
+
+        const accessToken = session.access_token;
+        const forwarded = req.headers['x-forwarded-for'];
+        const realIp = forwarded ? forwarded.split(',')[0] : req.socket.remoteAddress;
+
+        res.send("ACCESS_TOKEN: " + accessToken + "<br>IP: " + realIp);
+
     }catch(e){
         res.send(e.message);
     }
@@ -24,14 +30,14 @@ app.get("/redirect", async (req,res)=>{
 const runLiveEngine = require("./engine/liveEngine");
 
 app.get("/", (req,res)=>{
-    res.send("AlgoBot V66 LOGIN FIX LIVE");
+    res.send("AlgoBot V67 AI + BACKTEST LIVE");
 });
 
 app.get("/performance", async (req,res)=>{
     try{
         const capital = 8491.8;
         const activeTrades = await runLiveEngine(capital);
-        res.json({ capital, activeTrades, mode:"RISK_ENGINE" });
+        res.json({ capital, activeTrades, mode:"AI_BACKTEST" });
     }catch(e){
         res.json({error:e.message});
     }
