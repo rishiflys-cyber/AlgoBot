@@ -1,13 +1,13 @@
 const strategy = require("./strategyEngine");
 
-let activeTrades = [];
-
 async function runLiveEngine(capital){
     const signals = await (strategy.generateSignals || strategy)(capital);
 
-    activeTrades = [];
+    const activeTrades = [];
 
     for(let s of signals){
+        if(!s.symbol) continue;
+
         activeTrades.push({
             symbol: s.symbol,
             entry: s.price,

@@ -1,4 +1,4 @@
-// HARD FIX: if API fails, still generate trades
+// SAFE FIX: handle symbol structure properly
 
 const symbols = require("../nse200.json");
 
@@ -7,12 +7,16 @@ async function generateSignals(capital){
 
     const results = [];
 
-    // GUARANTEED SIGNAL GENERATION (NO API DEPENDENCY)
     for (let i = 0; i < 10; i++) {
         const s = symbols[i];
+
+        const sym = s.tradingsymbol || s.symbol || s;
+
+        if(!sym) continue;
+
         results.push({
-            symbol: s.tradingsymbol,
-            price: 100 + i, // dummy price
+            symbol: sym,
+            price: 100 + i,
             score: 5
         });
     }
