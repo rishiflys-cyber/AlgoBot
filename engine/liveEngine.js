@@ -10,23 +10,46 @@ async function runLiveEngine(capital){
 
     for(let s of signals){
         try{
-            // SAFE PRICE (avoid upper circuit rejection)
-            const safePrice = s.price * 0.99;
+            const price = s.price;
 
-            const order = await kc.placeOrder("amo", {
+            // BUY ORDER (MIS)
+            const buy = await kc.placeOrder("regular", {
                 exchange: "NSE",
                 tradingsymbol: s.symbol,
                 transaction_type: "BUY",
                 quantity: 1,
-                product: "CNC",
+                product: "MIS",
                 order_type: "LIMIT",
-                price: parseFloat(safePrice.toFixed(2))
+                price: price
+            });
+
+            // STOP LOSS (SL-M)
+            const sl = await kc.placeOrder("regular", {
+                exchange: "NSE",
+                tradingsymbol: s.symbol,
+                transaction_type: "SELL",
+                quantity: 1,
+                product: "MIS",
+                order_type: "SL-M",
+                trigger_price: parseFloat((price * 0.98).toFixed(2))
+            });
+
+            // TARGET (LIMIT SELL)
+            const target = await kc.placeOrder("regular", {
+                exchange: "NSE",
+                tradingsymbol: s.symbol,
+                transaction_type: "SELL",
+                quantity: 1,
+                product: "MIS",
+                order_type: "LIMIT",
+                price: parseFloat((price * 1.02).toFixed(2))
             });
 
             trades.push({
                 symbol: s.symbol,
-                order_id: order.order_id,
-                price: safePrice,
+                entry: price,
+                sl: price * 0.98,
+                target: price * 1.02,
                 status: "PLACED"
             });
 
