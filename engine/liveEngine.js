@@ -1,20 +1,42 @@
+const KiteConnect = require("kiteconnect").KiteConnect;
+const fs = require("fs");
+const path = require("path");
 const strategy = require("./strategyEngine");
+
+const kc = new KiteConnect({ api_key: process.env.API_KEY });
+const accessToken = fs.readFileSync(path.join(__dirname, "../access_token.txt"), "utf8").trim();
+kc.setAccessToken(accessToken);
 
 async function runLiveEngine(capital){
     const signals = await (strategy.generateSignals || strategy)(capital);
-
-    const activeTrades = [];
+    const trades = [];
 
     for(let s of signals){
-        activeTrades.push({
-            symbol: s.symbol || "UNKNOWN",
-            entry: s.price,
-            qty: 1,
-            status: "OPEN"
-        });
+        try{
+            const order = await kc.placeOrder("regular", {
+                exchange: "NSE",
+                tradingsymbol: s.symbol,
+                transaction_type: "BUY",
+                quantity: 1,
+                product: "MIS",
+                order_type: "MARKET"
+            });
+
+            trades.push({
+                symbol: s.symbol,
+                order_id: order.order_id,
+                status: "PLACED"
+            });
+
+        }catch(e){
+            trades.push({
+                symbol: s.symbol,
+                status: "FAILED"
+            });
+        }
     }
 
-    return activeTrades;
+    return trades;
 }
 
 module.exports = runLiveEngine;
