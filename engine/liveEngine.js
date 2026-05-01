@@ -12,11 +12,9 @@ async function runLiveEngine(capital){
 
     for(let s of signals){
         try{
-            const symbol = s.symbol;
-
             const order = await kc.placeOrder("amo", {
                 exchange: "NSE",
-                tradingsymbol: symbol,
+                tradingsymbol: s.symbol,
                 transaction_type: "BUY",
                 quantity: 1,
                 product: "CNC",
@@ -24,7 +22,7 @@ async function runLiveEngine(capital){
             });
 
             const trade = {
-                symbol,
+                symbol: s.symbol,
                 entry: s.price,
                 qty: 1,
                 stoploss: s.price * 0.98,
