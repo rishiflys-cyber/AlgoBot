@@ -12,7 +12,7 @@ const symbols = require("../nse200.json").slice(0, 40);
 async function getHistorical(token) {
     try {
         const to = new Date();
-        const from = new Date(to.getTime() - (2 * 60 * 60 * 1000)); // 2 hrs
+        const from = new Date(to.getTime() - (2 * 60 * 60 * 1000));
         return await kc.getHistoricalData(token, from, to, "5minute");
     } catch {
         return [];
@@ -34,7 +34,7 @@ function momentum(c){
 }
 
 function breakout(c){
-    return c[c.length-1].close >= c[c.length-2].high * 0.998; // relaxed
+    return c[c.length-1].close >= c[c.length-2].high * 0.998;
 }
 
 function bullish(x){
@@ -44,7 +44,16 @@ function bullish(x){
 function volumeSpike(c){
     let last = c[c.length-1].volume;
     let avg = c.slice(-6,-1).reduce((a,b)=>a+b.volume,0)/5;
-    return last > avg * 1.5;
+    return last > avg * 1.3;
+}
+
+// NEW: Pullback logic
+function pullbackEntry(c, ema9){
+    const last = c[c.length-1];
+    const price = last.close;
+    const emaVal = ema9[ema9.length-1];
+
+    return Math.abs(price - emaVal)/price < 0.002; // near EMA
 }
 
 async function generateSignals(capital){
@@ -63,17 +72,33 @@ async function generateSignals(capital){
 
             const last = c[c.length-1];
 
+            const trend = ema9[ema9.length-1] > ema21[ema21.length-1];
+
+            // PRIMARY: breakout
             if(
                 breakout(c) &&
                 bullish(last) &&
                 momentum(c) &&
                 volumeSpike(c) &&
-                ema9[ema9.length-1] > ema21[ema21.length-1]
+                trend
             ){
                 results.push({
                     symbol: s.tradingsymbol,
                     price: last.close,
                     score: 15
+                });
+            }
+
+            // SECONDARY: pullback
+            else if(
+                trend &&
+                bullish(last) &&
+                pullbackEntry(c, ema9)
+            ){
+                results.push({
+                    symbol: s.tradingsymbol,
+                    price: last.close,
+                    score: 10
                 });
             }
 
