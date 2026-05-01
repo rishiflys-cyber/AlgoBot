@@ -10,6 +10,9 @@ async function runLiveEngine(capital){
 
     for(let s of signals){
         try{
+            // SAFE PRICE (avoid upper circuit rejection)
+            const safePrice = s.price * 0.99;
+
             const order = await kc.placeOrder("amo", {
                 exchange: "NSE",
                 tradingsymbol: s.symbol,
@@ -17,13 +20,13 @@ async function runLiveEngine(capital){
                 quantity: 1,
                 product: "CNC",
                 order_type: "LIMIT",
-                price: s.price
+                price: parseFloat(safePrice.toFixed(2))
             });
 
             trades.push({
                 symbol: s.symbol,
                 order_id: order.order_id,
-                price: s.price,
+                price: safePrice,
                 status: "PLACED"
             });
 

@@ -23,7 +23,7 @@ app.get("/redirect", async (req,res)=>{
 const runLiveEngine = require("./engine/liveEngine");
 
 app.get("/", (req,res)=>{
-    res.send("AlgoBot V61 MARKET FIX LIVE");
+    res.send("AlgoBot V61 PRICE FIX LIVE");
 });
 
 app.get("/performance", async (req,res)=>{
