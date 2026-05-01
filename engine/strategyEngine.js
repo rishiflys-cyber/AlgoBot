@@ -37,7 +37,7 @@ function volatile(c) {
     return ((x.high - x.low) / x.close) > 0.003;
 }
 
-async function runStrategy(capital) {
+async function generateSignals(capital) {
     if (capital < 5000) return [];
 
     const results = [];
@@ -62,4 +62,5 @@ async function runStrategy(capital) {
     return results.slice(0, 10);
 }
 
-module.exports = { runStrategy, generateSignals: runStrategy };
+// CRITICAL: export EXACT function name
+module.exports.generateSignals = generateSignals;
