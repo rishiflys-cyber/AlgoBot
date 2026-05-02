@@ -30,39 +30,25 @@ app.get("/redirect", async (req,res)=>{
 const runLiveEngine = require("./engine/liveEngine");
 
 app.get("/", (req,res)=>{
-    res.send("AlgoBot V70 REAL EXECUTION TRACKING LIVE");
+    res.send("AlgoBot V71 TRADE MONITOR LIVE");
 });
 
 app.get("/performance", async (req,res)=>{
     try{
         const capital = 8491.8;
         const activeTrades = await runLiveEngine(capital);
-        res.json({ capital, activeTrades, mode:"REAL_EXECUTION_TRACKING" });
+        res.json({ capital, activeTrades, mode:"TRADE_MONITOR" });
     }catch(e){
         res.json({error:e.message});
     }
 });
 
-app.get("/pnl", (req,res)=>{
+app.get("/positions", async (req,res)=>{
     try{
-        const data = JSON.parse(fs.readFileSync("./data/trades.json"));
-        let pnl = 0;
-        let wins = 0;
-
-        data.forEach(t=>{
-            pnl += t.pnl || 0;
-            if(t.pnl > 0) wins++;
-        });
-
-        res.json({
-            total_trades: data.length,
-            wins,
-            loss: data.length - wins,
-            net_pnl: pnl
-        });
-
+        const positions = await kc.getPositions();
+        res.json(positions);
     }catch(e){
-        res.json({error:"No trades yet"});
+        res.json({error:e.message});
     }
 });
 

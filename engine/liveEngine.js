@@ -16,14 +16,19 @@ async function runLiveEngine(capital){
 
     if(!isMarketOpen()) return [{status:"MARKET_CLOSED_IST"}];
 
-    const signals = await strategy.generateSignals(kc);
-
     let log = [];
     try{ log = JSON.parse(fs.readFileSync("./data/trades.json")); }catch{}
 
+    const signals = await strategy.generateSignals(kc);
     const trades = [];
 
     for(let s of signals){
+
+        const existing = log.find(t=>t.symbol === s.symbol && t.status === "LIVE");
+        if(existing){
+            trades.push(existing);
+            continue;
+        }
 
         try{
             const entry = s.price;
@@ -43,15 +48,14 @@ async function runLiveEngine(capital){
             });
 
             const trade = {
-                symbol: s.symbol,
+                symbol:s.symbol,
                 qty,
                 entry,
                 sl,
                 target,
                 order_id: order.order_id,
-                time: new Date().toISOString(),
-                pnl: 0,
-                status: "LIVE"
+                status:"LIVE",
+                time:new Date().toISOString()
             };
 
             log.push(trade);
