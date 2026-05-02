@@ -19,46 +19,45 @@ async function runEngine(totalCapital){
         return [{status:"MARKET_CLOSED_NO_EXECUTION"}];
     }
 
-    // CAPITAL SPLIT
-    const capitalA = totalCapital * 0.5;
-    const capitalB = totalCapital * 0.5;
+    // RISK SETTINGS
+    const riskPerTrade = 0.01; // 1%
+    const maxDailyLoss = totalCapital * 0.03; // 3%
+    const maxTrades = 4;
+
+    let totalRiskUsed = 0;
+    let tradesTaken = 0;
 
     const signalsA = await breakout.generate(kc);
     const signalsB = await momentum.generate(kc);
 
     const trades = [];
 
-    // STRATEGY A
-    for(let s of signalsA){
-        try{
-            const qty = Math.max(1, Math.floor(capitalA / s.price));
+    const allSignals = [
+        ...signalsA.map(s=>({...s, strategy:"BREAKOUT"})),
+        ...signalsB.map(s=>({...s, strategy:"MOMENTUM"}))
+    ];
 
-            const order = await kc.placeOrder("regular", {
-                exchange: "NSE",
-                tradingsymbol: s.symbol,
-                transaction_type: "BUY",
-                quantity: qty,
-                product: "MIS",
-                order_type: "LIMIT",
-                price: s.price
-            });
+    for(let s of allSignals){
 
-            trades.push({
-                strategy:"BREAKOUT",
-                symbol:s.symbol,
-                qty,
-                order_id:order.order_id
-            });
-
-        }catch(e){
-            trades.push({strategy:"BREAKOUT",symbol:s.symbol,status:"FAILED"});
+        if(tradesTaken >= maxTrades){
+            trades.push({status:"MAX_TRADES_REACHED"});
+            break;
         }
-    }
 
-    // STRATEGY B
-    for(let s of signalsB){
+        if(totalRiskUsed >= maxDailyLoss){
+            trades.push({status:"DAILY_LOSS_LIMIT_REACHED"});
+            break;
+        }
+
         try{
-            const qty = Math.max(1, Math.floor(capitalB / s.price));
+            const entry = s.price;
+            const sl = entry * 0.98;
+
+            const riskAmount = totalCapital * riskPerTrade;
+            const qty = Math.max(1, Math.floor(riskAmount / (entry - sl)));
+
+            totalRiskUsed += riskAmount;
+            tradesTaken++;
 
             const order = await kc.placeOrder("regular", {
                 exchange: "NSE",
@@ -67,18 +66,20 @@ async function runEngine(totalCapital){
                 quantity: qty,
                 product: "MIS",
                 order_type: "LIMIT",
-                price: s.price
+                price: entry
             });
 
             trades.push({
-                strategy:"MOMENTUM",
+                strategy:s.strategy,
                 symbol:s.symbol,
                 qty,
-                order_id:order.order_id
+                risk: riskAmount,
+                order_id:order.order_id,
+                status:"PLACED"
             });
 
         }catch(e){
-            trades.push({strategy:"MOMENTUM",symbol:s.symbol,status:"FAILED"});
+            trades.push({symbol:s.symbol,status:"FAILED",reason:e.message});
         }
     }
 
