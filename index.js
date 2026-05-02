@@ -8,7 +8,7 @@ const PORT = process.env.PORT || 3000;
 const kc = new KiteConnect({ api_key: process.env.API_KEY });
 kc.setAccessToken(process.env.ACCESS_TOKEN);
 
-// ===== LOGIN =====
+// LOGIN
 app.get("/login", (req,res)=>{
     res.redirect(kc.getLoginURL());
 });
@@ -27,9 +27,10 @@ app.get("/redirect", async (req,res)=>{
     }
 });
 
-// ===== DASHBOARD =====
+// DASHBOARD
 app.use(express.static(path.join(__dirname, "public")));
 
+// METRICS
 app.get("/api/metrics", async (req,res)=>{
     try{
         const positions = await kc.getPositions();
@@ -42,13 +43,37 @@ app.get("/api/metrics", async (req,res)=>{
     }
 });
 
-// ===== SIMPLE STRATEGY =====
+// PERFORMANCE FIX
+app.get("/performance", async (req,res)=>{
+    try{
+        const positions = await kc.getPositions();
+        let pnl = 0;
+        positions.net.forEach(p=> pnl += p.pnl);
+
+        res.json({
+            capital: 8491.8,
+            pnl,
+            positions: positions.net,
+            mode: "AUTO_SCHEDULER"
+        });
+    }catch(e){
+        res.json({error:e.message});
+    }
+});
+
+// AUTO STRATEGY (SAFE CHECK)
 async function runStrategy(){
     try{
+        const positions = await kc.getPositions();
+        if(positions.net.length > 0){
+            console.log("Trade exists, skipping...");
+            return;
+        }
+
         const quote = await kc.getQuote(["NSE:TCS"]);
         const price = quote["NSE:TCS"].last_price;
 
-        const order = await kc.placeOrder("regular", {
+        await kc.placeOrder("regular", {
             exchange: "NSE",
             tradingsymbol: "TCS",
             transaction_type: "BUY",
@@ -58,21 +83,21 @@ async function runStrategy(){
             price: price
         });
 
-        console.log("Trade Placed:", order.order_id);
+        console.log("Trade Placed");
 
     }catch(e){
         console.log("Error:", e.message);
     }
 }
 
-// ===== AUTO SCHEDULER =====
+// AUTO LOOP
 setInterval(()=>{
     console.log("Running strategy...");
     runStrategy();
-}, 15000); // every 15 seconds
+}, 15000);
 
 app.get("/", (req,res)=>{
     res.sendFile(path.join(__dirname,"public","index.html"));
 });
 
-app.listen(PORT, ()=>console.log("V78 AUTO RUNNING"));
+app.listen(PORT, ()=>console.log("V78 FIX RUNNING"));

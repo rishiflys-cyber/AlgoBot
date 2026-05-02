@@ -9,7 +9,7 @@ body { background:#111; color:#0f0; font-family:Arial; }
 </head>
 <body>
 
-<h1>AlgoBot V78 AUTO SCHEDULER</h1>
+<h1>AlgoBot V78 AUTO DASHBOARD</h1>
 
 <div class="card">
 <h2>P&L</h2>
@@ -27,7 +27,8 @@ async function load(){
     const data = await res.json();
 
     document.getElementById("pnl").innerText = data.pnl;
-    document.getElementById("positions").innerText = JSON.stringify(data.positions,null,2);
+    document.getElementById("positions").innerText =
+        JSON.stringify(data.positions,null,2);
 }
 
 setInterval(load, 3000);
