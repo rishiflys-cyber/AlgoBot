@@ -1,6 +1,6 @@
-const fs = require("fs");
 const KiteConnect = require("kiteconnect").KiteConnect;
-const strategy = require("./strategyEngine");
+const breakout = require("./strategies/breakout");
+const momentum = require("./strategies/momentum");
 
 const kc = new KiteConnect({ api_key: process.env.API_KEY });
 kc.setAccessToken(process.env.ACCESS_TOKEN);
@@ -13,40 +13,25 @@ function isMarketOpen(){
     return !(day === 0 || day === 6) && t >= 555 && t <= 925;
 }
 
-async function runLiveEngine(capital){
+async function runEngine(totalCapital){
 
     if(!isMarketOpen()){
         return [{status:"MARKET_CLOSED_NO_EXECUTION"}];
     }
 
-    let log = [];
-    try{ log = JSON.parse(fs.readFileSync("./data/trades.json")); }catch{}
+    // CAPITAL SPLIT
+    const capitalA = totalCapital * 0.5;
+    const capitalB = totalCapital * 0.5;
 
-    const signals = await strategy.generateSignals(kc);
+    const signalsA = await breakout.generate(kc);
+    const signalsB = await momentum.generate(kc);
+
     const trades = [];
 
-    for(let s of signals){
-
-        let existing = log.find(t=>t.symbol === s.symbol && t.status==="LIVE");
-
-        if(existing){
-            const currentPrice = s.price;
-
-            if(currentPrice > existing.entry * 1.01){
-                existing.sl = currentPrice * 0.99;
-                existing.status = "TRAILING";
-            }
-
-            trades.push(existing);
-            continue;
-        }
-
+    // STRATEGY A
+    for(let s of signalsA){
         try{
-            const entry = s.price;
-            const sl = entry * 0.98;
-            const target = entry * 1.03;
-
-            const qty = Math.max(1, Math.floor((capital*0.01)/(entry-sl)));
+            const qty = Math.max(1, Math.floor(capitalA / s.price));
 
             const order = await kc.placeOrder("regular", {
                 exchange: "NSE",
@@ -55,31 +40,49 @@ async function runLiveEngine(capital){
                 quantity: qty,
                 product: "MIS",
                 order_type: "LIMIT",
-                price: entry
+                price: s.price
             });
 
-            const trade = {
+            trades.push({
+                strategy:"BREAKOUT",
                 symbol:s.symbol,
                 qty,
-                entry,
-                sl,
-                target,
-                order_id:order.order_id,
-                status:"LIVE",
-                time:new Date().toISOString()
-            };
-
-            log.push(trade);
-            fs.writeFileSync("./data/trades.json", JSON.stringify(log,null,2));
-
-            trades.push(trade);
+                order_id:order.order_id
+            });
 
         }catch(e){
-            trades.push({symbol:s.symbol,status:"FAILED",reason:e.message});
+            trades.push({strategy:"BREAKOUT",symbol:s.symbol,status:"FAILED"});
+        }
+    }
+
+    // STRATEGY B
+    for(let s of signalsB){
+        try{
+            const qty = Math.max(1, Math.floor(capitalB / s.price));
+
+            const order = await kc.placeOrder("regular", {
+                exchange: "NSE",
+                tradingsymbol: s.symbol,
+                transaction_type: "BUY",
+                quantity: qty,
+                product: "MIS",
+                order_type: "LIMIT",
+                price: s.price
+            });
+
+            trades.push({
+                strategy:"MOMENTUM",
+                symbol:s.symbol,
+                qty,
+                order_id:order.order_id
+            });
+
+        }catch(e){
+            trades.push({strategy:"MOMENTUM",symbol:s.symbol,status:"FAILED"});
         }
     }
 
     return trades;
 }
 
-module.exports = runLiveEngine;
+module.exports = runEngine;

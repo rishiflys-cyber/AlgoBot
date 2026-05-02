@@ -24,17 +24,17 @@ app.get("/redirect", async (req,res)=>{
     }
 });
 
-const runLiveEngine = require("./engine/liveEngine");
+const runEngine = require("./engine/liveEngine");
 
 app.get("/", (req,res)=>{
-    res.send("AlgoBot V73 TRAILING SL LIVE");
+    res.send("AlgoBot V74 MULTI STRATEGY LIVE");
 });
 
 app.get("/performance", async (req,res)=>{
     try{
         const capital = 8491.8;
-        const activeTrades = await runLiveEngine(capital);
-        res.json({ capital, activeTrades, mode:"TRAILING_SL" });
+        const result = await runEngine(capital);
+        res.json({ capital, result, mode:"MULTI_STRATEGY" });
     }catch(e){
         res.json({error:e.message});
     }
