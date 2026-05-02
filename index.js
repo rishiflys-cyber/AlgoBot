@@ -1,43 +1,34 @@
 const express = require("express");
+const path = require("path");
 const { KiteConnect } = require("kiteconnect");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 const kc = new KiteConnect({ api_key: process.env.API_KEY });
+kc.setAccessToken(process.env.ACCESS_TOKEN);
 
-app.get("/login", (req,res)=>{
-    res.redirect(kc.getLoginURL());
-});
+// serve dashboard
+app.use(express.static(path.join(__dirname, "public")));
 
-app.get("/redirect", async (req,res)=>{
+app.get("/api/metrics", async (req,res)=>{
     try{
-        const requestToken = req.query.request_token;
-        const session = await kc.generateSession(requestToken, process.env.API_SECRET);
+        const positions = await kc.getPositions();
+        let pnl = 0;
+        positions.net.forEach(p=> pnl += p.pnl);
 
-        const forwarded = req.headers['x-forwarded-for'];
-        const realIp = forwarded ? forwarded.split(',')[0] : req.socket.remoteAddress;
-
-        res.send("ACCESS_TOKEN: " + session.access_token + "<br>IP: " + realIp);
-    }catch(e){
-        res.send(e.message);
-    }
-});
-
-const runEngine = require("./engine/liveEngine");
-
-app.get("/", (req,res)=>{
-    res.send("AlgoBot V76 REAL PNL SYNC LIVE");
-});
-
-app.get("/performance", async (req,res)=>{
-    try{
-        const capital = 8491.8;
-        const result = await runEngine(capital);
-        res.json({ capital, result, mode:"REAL_PNL_SYNC" });
+        res.json({
+            pnl,
+            positions: positions.net,
+            timestamp: new Date().toISOString()
+        });
     }catch(e){
         res.json({error:e.message});
     }
 });
 
-app.listen(PORT, ()=>console.log("running"));
+app.get("/", (req,res)=>{
+    res.sendFile(path.join(__dirname,"public","index.html"));
+});
+
+app.listen(PORT, ()=>console.log("running V77 dashboard"));

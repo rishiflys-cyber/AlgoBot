@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>AlgoBot Dashboard</title>
+<style>
+body { font-family: Arial; background:#111; color:#0f0; }
+.card { border:1px solid #0f0; padding:10px; margin:10px; }
+</style>
+</head>
+<body>
+
+<h1>AlgoBot V77 LIVE DASHBOARD</h1>
+
+<div class="card">
+<h2>P&L</h2>
+<p id="pnl">Loading...</p>
+</div>
+
+<div class="card">
+<h2>Positions</h2>
+<pre id="positions"></pre>
+</div>
+
+<script>
+async function load(){
+    const res = await fetch("/api/metrics");
+    const data = await res.json();
+
+    document.getElementById("pnl").innerText = data.pnl;
+
+    document.getElementById("positions").innerText =
+        JSON.stringify(data.positions,null,2);
+}
+
+setInterval(load, 3000);
+load();
+</script>
+
+</body>
+</html>
