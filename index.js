@@ -27,14 +27,14 @@ app.get("/redirect", async (req,res)=>{
 const runEngine = require("./engine/liveEngine");
 
 app.get("/", (req,res)=>{
-    res.send("AlgoBot V75 RISK MANAGER LIVE");
+    res.send("AlgoBot V76 REAL PNL SYNC LIVE");
 });
 
 app.get("/performance", async (req,res)=>{
     try{
         const capital = 8491.8;
         const result = await runEngine(capital);
-        res.json({ capital, result, mode:"RISK_MANAGER" });
+        res.json({ capital, result, mode:"REAL_PNL_SYNC" });
     }catch(e){
         res.json({error:e.message});
     }

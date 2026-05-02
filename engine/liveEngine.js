@@ -13,19 +13,33 @@ function isMarketOpen(){
     return !(day === 0 || day === 6) && t >= 555 && t <= 925;
 }
 
+async function getRealPnL(){
+    const positions = await kc.getPositions();
+    let pnl = 0;
+
+    positions.net.forEach(p=>{
+        pnl += p.pnl;
+    });
+
+    return pnl;
+}
+
 async function runEngine(totalCapital){
 
     if(!isMarketOpen()){
         return [{status:"MARKET_CLOSED_NO_EXECUTION"}];
     }
 
-    // RISK SETTINGS
-    const riskPerTrade = 0.01; // 1%
-    const maxDailyLoss = totalCapital * 0.03; // 3%
-    const maxTrades = 4;
+    const realPnL = await getRealPnL();
+    const maxLoss = -totalCapital * 0.03;
 
-    let totalRiskUsed = 0;
-    let tradesTaken = 0;
+    if(realPnL <= maxLoss){
+        return [{
+            status:"AUTO_SHUTDOWN",
+            reason:"DAILY LOSS LIMIT HIT",
+            pnl: realPnL
+        }];
+    }
 
     const signalsA = await breakout.generate(kc);
     const signalsB = await momentum.generate(kc);
@@ -38,26 +52,8 @@ async function runEngine(totalCapital){
     ];
 
     for(let s of allSignals){
-
-        if(tradesTaken >= maxTrades){
-            trades.push({status:"MAX_TRADES_REACHED"});
-            break;
-        }
-
-        if(totalRiskUsed >= maxDailyLoss){
-            trades.push({status:"DAILY_LOSS_LIMIT_REACHED"});
-            break;
-        }
-
         try{
-            const entry = s.price;
-            const sl = entry * 0.98;
-
-            const riskAmount = totalCapital * riskPerTrade;
-            const qty = Math.max(1, Math.floor(riskAmount / (entry - sl)));
-
-            totalRiskUsed += riskAmount;
-            tradesTaken++;
+            const qty = Math.max(1, Math.floor((totalCapital*0.01)/(s.price*0.02)));
 
             const order = await kc.placeOrder("regular", {
                 exchange: "NSE",
@@ -66,14 +62,13 @@ async function runEngine(totalCapital){
                 quantity: qty,
                 product: "MIS",
                 order_type: "LIMIT",
-                price: entry
+                price: s.price
             });
 
             trades.push({
                 strategy:s.strategy,
                 symbol:s.symbol,
                 qty,
-                risk: riskAmount,
                 order_id:order.order_id,
                 status:"PLACED"
             });
