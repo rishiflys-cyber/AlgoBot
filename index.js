@@ -7,7 +7,7 @@ const PORT = process.env.PORT || 3000;
 
 const kc = new KiteConnect({ api_key: process.env.API_KEY });
 
-// LOGIN FIX
+// LOGIN
 app.get("/login", (req,res)=>{
     res.redirect(kc.getLoginURL());
 });
@@ -29,9 +29,30 @@ app.get("/redirect", async (req,res)=>{
 
 kc.setAccessToken(process.env.ACCESS_TOKEN);
 
-// dashboard
+// DASHBOARD STATIC
 app.use(express.static(path.join(__dirname, "public")));
 
+// PERFORMANCE ROUTE (FIXED)
+app.get("/performance", async (req,res)=>{
+    try{
+        const positions = await kc.getPositions();
+        let pnl = 0;
+
+        positions.net.forEach(p => pnl += p.pnl);
+
+        res.json({
+            capital: 8491.8,
+            pnl,
+            positions: positions.net,
+            mode: "LIVE_DASHBOARD"
+        });
+
+    }catch(e){
+        res.json({error:e.message});
+    }
+});
+
+// API METRICS
 app.get("/api/metrics", async (req,res)=>{
     try{
         const positions = await kc.getPositions();
@@ -52,4 +73,4 @@ app.get("/", (req,res)=>{
     res.sendFile(path.join(__dirname,"public","index.html"));
 });
 
-app.listen(PORT, ()=>console.log("running V77 FIX"));
+app.listen(PORT, ()=>console.log("running V77 FINAL"));
