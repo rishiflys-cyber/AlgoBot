@@ -27,7 +27,6 @@ async function load(){
     const data = await res.json();
 
     document.getElementById("pnl").innerText = data.pnl;
-
     document.getElementById("positions").innerText =
         JSON.stringify(data.positions,null,2);
 }
