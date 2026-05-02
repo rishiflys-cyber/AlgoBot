@@ -1,25 +1,43 @@
 const express = require("express");
-const path = require("path");
+const { KiteConnect } = require("kiteconnect");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const CAPITAL = 8491.8;
+const kc = new KiteConnect({ api_key: process.env.API_KEY });
 
-// DASHBOARD
-app.use(express.static(path.join(__dirname,"public")));
-
-// PERFORMANCE WITH CAPITAL FIX
-app.get("/performance", async (req,res)=>{
-  const engine = require("./engine/liveEngine");
-  const result = await engine.run();
-
-  res.json({
-    capital: CAPITAL,
-    ...result
-  });
+// ✅ LOGIN FIX
+app.get("/login", (req, res) => {
+    res.redirect(kc.getLoginURL());
 });
 
-app.get("/", (req,res)=>res.sendFile(path.join(__dirname,"public","index.html")));
+app.get("/redirect", async (req, res) => {
+    try {
+        const session = await kc.generateSession(
+            req.query.request_token,
+            process.env.API_SECRET
+        );
 
-app.listen(PORT,()=>console.log("V79 CAPITAL FIX RUNNING"));
+        const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+
+        res.send("ACCESS_TOKEN: " + session.access_token + "<br>IP: " + ip);
+
+    } catch (e) {
+        res.send(e.message);
+    }
+});
+
+// PERFORMANCE
+app.get("/performance", (req, res) => {
+    res.json({
+        capital: 8491.8,
+        status: "READY",
+        mode: "FULL_AUTO"
+    });
+});
+
+app.get("/", (req,res)=>{
+    res.send("AlgoBot Running");
+});
+
+app.listen(PORT, () => console.log("LOGIN FIX RUNNING"));
