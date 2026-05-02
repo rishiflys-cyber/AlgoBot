@@ -1,84 +1,88 @@
-const KiteConnect = require("kiteconnect").KiteConnect;
+const fs = require("fs");
 const breakout = require("./strategies/breakout");
 const momentum = require("./strategies/momentum");
 
-const kc = new KiteConnect({ api_key: process.env.API_KEY });
-kc.setAccessToken(process.env.ACCESS_TOKEN);
+exports.run = async function(kc, capital){
 
-function isMarketOpen(){
-    const now = new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" });
-    const d = new Date(now);
-    const t = d.getHours()*60 + d.getMinutes();
-    const day = d.getDay();
-    return !(day === 0 || day === 6) && t >= 555 && t <= 925;
-}
+  const now = new Date().toLocaleString("en-US",{timeZone:"Asia/Kolkata"});
+  const d = new Date(now);
+  const t = d.getHours()*60 + d.getMinutes();
 
-async function getRealPnL(){
-    const positions = await kc.getPositions();
-    let pnl = 0;
+  if(t < 555 || t > 925){
+    return {status:"MARKET_CLOSED", mode:"FULL_AUTO"};
+  }
 
-    positions.net.forEach(p=>{
-        pnl += p.pnl;
-    });
+  const positions = await kc.getPositions();
+  let pnl = 0;
+  positions.net.forEach(p=>pnl+=p.pnl);
 
-    return pnl;
-}
+  const maxLoss = -capital*0.03;
+  if(pnl <= maxLoss){
+    return {status:"AUTO_STOP", pnl};
+  }
 
-async function runEngine(totalCapital){
+  let tradesLog=[];
+  try{ tradesLog=JSON.parse(fs.readFileSync("./data/trades.json")); }catch{}
 
-    if(!isMarketOpen()){
-        return [{status:"MARKET_CLOSED_NO_EXECUTION"}];
+  const signals=[
+    ...(await breakout.generate(kc)),
+    ...(await momentum.generate(kc))
+  ];
+
+  const results=[];
+
+  for(let s of signals){
+
+    let existing = tradesLog.find(t=>t.symbol===s.symbol && t.status==="LIVE");
+
+    if(existing){
+      let price = s.price;
+
+      if(price > existing.entry*1.01){
+        existing.sl = price*0.99;
+        existing.status="TRAILING";
+      }
+
+      results.push(existing);
+      continue;
     }
 
-    const realPnL = await getRealPnL();
-    const maxLoss = -totalCapital * 0.03;
+    if(positions.net.length>0) continue;
 
-    if(realPnL <= maxLoss){
-        return [{
-            status:"AUTO_SHUTDOWN",
-            reason:"DAILY LOSS LIMIT HIT",
-            pnl: realPnL
-        }];
+    try{
+      let entry = s.price;
+      let sl = entry*0.98;
+      let risk = capital*0.01;
+      let qty = Math.max(1, Math.floor(risk/(entry-sl)));
+
+      let order = await kc.placeOrder("regular",{
+        exchange:"NSE",
+        tradingsymbol:s.symbol,
+        transaction_type:"BUY",
+        quantity:qty,
+        product:"MIS",
+        order_type:"LIMIT",
+        price:entry
+      });
+
+      let trade={
+        symbol:s.symbol,
+        entry,
+        sl,
+        qty,
+        order_id:order.order_id,
+        status:"LIVE"
+      };
+
+      tradesLog.push(trade);
+      fs.writeFileSync("./data/trades.json",JSON.stringify(tradesLog,null,2));
+
+      results.push(trade);
+
+    }catch(e){
+      results.push({symbol:s.symbol,status:"FAILED",reason:e.message});
     }
+  }
 
-    const signalsA = await breakout.generate(kc);
-    const signalsB = await momentum.generate(kc);
-
-    const trades = [];
-
-    const allSignals = [
-        ...signalsA.map(s=>({...s, strategy:"BREAKOUT"})),
-        ...signalsB.map(s=>({...s, strategy:"MOMENTUM"}))
-    ];
-
-    for(let s of allSignals){
-        try{
-            const qty = Math.max(1, Math.floor((totalCapital*0.01)/(s.price*0.02)));
-
-            const order = await kc.placeOrder("regular", {
-                exchange: "NSE",
-                tradingsymbol: s.symbol,
-                transaction_type: "BUY",
-                quantity: qty,
-                product: "MIS",
-                order_type: "LIMIT",
-                price: s.price
-            });
-
-            trades.push({
-                strategy:s.strategy,
-                symbol:s.symbol,
-                qty,
-                order_id:order.order_id,
-                status:"PLACED"
-            });
-
-        }catch(e){
-            trades.push({symbol:s.symbol,status:"FAILED",reason:e.message});
-        }
-    }
-
-    return trades;
-}
-
-module.exports = runEngine;
+  return {mode:"FULL_SAFE_AUTO", pnl, trades:results};
+};
