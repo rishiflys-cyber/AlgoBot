@@ -10,36 +10,35 @@ exports.run = async function(kc, capital){
   const t = d.getHours()*60 + d.getMinutes();
 
   if(t < 555 || t > 925){
-    return { status:"MARKET_CLOSED", mode:"V81_ENGINE" };
+    return { status:"MARKET_CLOSED", mode:"FINAL_ENGINE" };
   }
 
   const positions = await kc.getPositions();
   let pnl = 0;
   positions.net.forEach(p=>pnl+=p.pnl);
 
-  const maxLoss = -capital * 0.03;
-  if(pnl <= maxLoss){
-    return { status:"AUTO_SHUTDOWN", pnl, mode:"V81_ENGINE" };
+  if(pnl <= -capital*0.03){
+    return { status:"AUTO_SHUTDOWN", pnl, mode:"FINAL_ENGINE" };
   }
 
   let tradesLog=[];
-  try{ tradesLog = JSON.parse(fs.readFileSync("./data/trades.json")); }catch{}
+  try{ tradesLog=JSON.parse(fs.readFileSync("./data/trades.json")); }catch{}
 
-  const signals = [
+  const signals=[
     ...(await breakout.generate(kc)),
     ...(await momentum.generate(kc))
   ];
 
-  const results = [];
+  const results=[];
 
   for(let s of signals){
 
     let existing = tradesLog.find(t=>t.symbol===s.symbol && t.status==="LIVE");
 
     if(existing){
-      if(s.price > existing.entry * 1.01){
-        existing.sl = s.price * 0.99;
-        existing.status = "TRAILING";
+      if(s.price > existing.entry*1.01){
+        existing.sl = s.price*0.99;
+        existing.status="TRAILING";
       }
       results.push(existing);
       continue;
@@ -49,8 +48,8 @@ exports.run = async function(kc, capital){
 
     try{
       let entry = s.price;
-      let sl = entry * 0.98;
-      let risk = capital * 0.01;
+      let sl = entry*0.98;
+      let risk = capital*0.01;
       let qty = Math.max(1, Math.floor(risk/(entry-sl)));
 
       let order = await kc.placeOrder("regular",{
@@ -63,7 +62,7 @@ exports.run = async function(kc, capital){
         price:entry
       });
 
-      let trade = {
+      let trade={
         symbol:s.symbol,
         entry,
         sl,
@@ -73,7 +72,7 @@ exports.run = async function(kc, capital){
       };
 
       tradesLog.push(trade);
-      fs.writeFileSync("./data/trades.json", JSON.stringify(tradesLog,null,2));
+      fs.writeFileSync("./data/trades.json",JSON.stringify(tradesLog,null,2));
 
       results.push(trade);
 
@@ -82,10 +81,5 @@ exports.run = async function(kc, capital){
     }
   }
 
-  return {
-    status:"RUNNING",
-    pnl,
-    trades:results,
-    mode:"V81_ENGINE"
-  };
+  return {status:"RUNNING", pnl, trades:results, mode:"FINAL_ENGINE"};
 };
