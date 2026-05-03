@@ -11,14 +11,17 @@ const kc = new KiteConnect({ api_key: process.env.API_KEY });
 app.get("/login",(req,res)=>res.redirect(kc.getLoginURL()));
 app.get("/redirect", async (req,res)=>{
   const session = await kc.generateSession(req.query.request_token, process.env.API_SECRET);
-  const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-  res.send("ACCESS_TOKEN: " + session.access_token + "<br>IP: " + ip);
+  res.send("ACCESS_TOKEN: " + session.access_token);
 });
 
 /* CONFIG */
 const symbols = ["RELIANCE","INFY","TCS","HDFCBANK"];
 let trades = [];
 let capital = 8491.8;
+
+const RISK_PER_TRADE = 0.02;     // 2%
+const MAX_DAILY_LOSS = 0.05;     // 5%
+let dailyPnL = 0;
 
 /* INDICATORS */
 function rsi(closes){
@@ -37,26 +40,24 @@ function ema(data,p){
   return e;
 }
 
-/* 🔥 ELITE SCORING */
-function scoreSignal(rsiVal, trend, momentum, volume){
+function scoreSignal(rsiVal, trend, momentum){
   let score = 0;
-
-  if(rsiVal < 45) score += 25;
-  if(rsiVal < 40) score += 10;
-
-  if(trend === "UP") score += 25;
-
+  if(rsiVal < 45) score += 30;
+  if(trend === "UP") score += 30;
   if(momentum > 0) score += 20;
-  if(momentum > 0.2) score += 10;
-
-  if(volume > 1.2) score += 10; // volume boost
-
   return score;
 }
 
+/* BOT */
 async function runBot(){
   try{
     kc.setAccessToken(process.env.ACCESS_TOKEN);
+
+    // 🔥 DAILY LOSS CONTROL
+    if(dailyPnL <= -capital * MAX_DAILY_LOSS){
+      console.log("MAX DAILY LOSS HIT - STOP TRADING");
+      return;
+    }
 
     const instrumentMap = {
       "RELIANCE": 738561,
@@ -70,6 +71,7 @@ async function runBot(){
     for(let symbol of symbols){
 
       const inst = instrumentMap[symbol];
+
       const now = new Date();
       const from = new Date(now.getTime() - 60*60*1000);
 
@@ -77,7 +79,6 @@ async function runBot(){
       if(!candles || candles.length < 20) continue;
 
       const closes = candles.map(c=>c.close);
-      const volumes = candles.map(c=>c.volume);
 
       const r = rsi(closes);
       const e20 = ema(closes,20);
@@ -88,38 +89,30 @@ async function runBot(){
       const prev = closes[closes.length-2];
       const momentum = price - prev;
 
-      const avgVol = volumes.reduce((a,b)=>a+b,0)/volumes.length;
-      const currentVol = volumes[volumes.length-1];
-      const volBoost = currentVol / avgVol;
+      const score = scoreSignal(r, trend, momentum);
 
-      const score = scoreSignal(r, trend, momentum, volBoost);
-
-      candidates.push({
-        symbol,
-        score,
-        price,
-        rsi: r,
-        trend,
-        momentum,
-        volume: volBoost
-      });
+      candidates.push({symbol, score, price});
     }
 
-    // 🔥 SELECT BEST TRADE ONLY
     candidates.sort((a,b)=>b.score - a.score);
     const best = candidates[0];
 
-    if(best && best.score >= 70){
+    if(best && best.score >= 60){
 
       let existing = trades.find(t => t.symbol===best.symbol && t.status==="LIVE");
 
       if(!existing){
 
+        // 🔥 POSITION SIZING
+        let riskAmount = capital * RISK_PER_TRADE;
+        let slDistance = best.price * 0.03;
+        let qty = Math.max(1, Math.floor(riskAmount / slDistance));
+
         const order = await kc.placeOrder("regular",{
           exchange:"NSE",
           tradingsymbol:best.symbol,
           transaction_type:"BUY",
-          quantity:1,
+          quantity:qty,
           product:"MIS",
           order_type:"MARKET"
         });
@@ -127,15 +120,15 @@ async function runBot(){
         trades.push({
           symbol:best.symbol,
           entry:best.price,
+          qty,
           sl:best.price*0.97,
           target:best.price*1.05,
-          score:best.score,
           status:"LIVE"
         });
       }
     }
 
-    // EXIT + TRAILING
+    // EXIT
     for(let t of trades){
       if(t.status==="LIVE"){
 
@@ -148,13 +141,14 @@ async function runBot(){
             exchange:"NSE",
             tradingsymbol:t.symbol,
             transaction_type:"SELL",
-            quantity:1,
+            quantity:t.qty,
             product:"MIS",
             order_type:"MARKET"
           });
 
-          let pnl = price - t.entry;
+          let pnl = (price - t.entry) * t.qty;
           capital += pnl;
+          dailyPnL += pnl;
 
           t.status = "CLOSED";
           t.exit = price;
@@ -178,11 +172,12 @@ setInterval(runBot,10000);
 app.get("/performance",(req,res)=>{
   res.json({
     capital,
+    dailyPnL,
     trades,
-    mode:"V104_ELITE"
+    risk_per_trade: RISK_PER_TRADE,
+    max_daily_loss: MAX_DAILY_LOSS,
+    mode:"V105_CAPITAL_RISK"
   });
 });
 
-app.get("/",(req,res)=>res.send("V104 ELITE RUNNING"));
-
-app.listen(PORT,()=>console.log("V104 ELITE RUNNING"));
+app.listen(PORT,()=>console.log("V105 RUNNING"));
