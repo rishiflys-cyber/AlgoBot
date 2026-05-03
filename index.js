@@ -18,7 +18,7 @@ app.get("/redirect", async (req,res)=>{
   res.send("ACCESS_TOKEN: "+session.access_token+"<br>IP: "+ip);
 });
 
-// ENGINE
+// PERFORMANCE
 app.get("/performance", async (req,res)=>{
   const engine = require("./engine/liveEngine");
   const result = await engine.run(kc, 8491.8);
@@ -33,4 +33,4 @@ app.get("/performance", async (req,res)=>{
 app.use(express.static(path.join(__dirname,"public")));
 app.get("/", (req,res)=>res.sendFile(path.join(__dirname,"public","index.html")));
 
-app.listen(PORT,()=>console.log("FINAL SYSTEM RUNNING"));
+app.listen(PORT,()=>console.log("V82 RUNNING"));
