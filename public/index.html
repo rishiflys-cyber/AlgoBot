@@ -1,11 +1,49 @@
 
-<html><body style="background:black;color:lime">
-<h2>V95 DATA ENGINE (REAL CANDLES)</h2>
-<pre id="data"></pre>
+<!DOCTYPE html>
+<html>
+<head>
+<title>AlgoBot Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+body { font-family: Arial; background:#111; color:#fff; }
+.card { background:#222; padding:20px; margin:10px; border-radius:10px; }
+</style>
+</head>
+<body>
+
+<h2>🚀 AlgoBot Dashboard</h2>
+
+<div class="card" id="stats"></div>
+
+<canvas id="chart" height="100"></canvas>
+
 <script>
-setInterval(async ()=>{
- let d=await fetch("/performance").then(r=>r.json());
- document.getElementById("data").innerText=JSON.stringify(d,null,2);
-},2000);
+async function loadData(){
+  const res = await fetch('/api/data');
+  const data = await res.json();
+
+  document.getElementById('stats').innerHTML = `
+    Capital: ${data.capital.toFixed(2)}<br>
+    Trades: ${data.stats.total}<br>
+    Win Rate: ${data.stats.winRate.toFixed(2)}%<br>
+    PnL: ${data.stats.totalPnL}
+  `;
+
+  const pnlData = data.trades.map(t=>t.pnl);
+  const labels = data.trades.map((_,i)=>i+1);
+
+  new Chart(document.getElementById('chart'),{
+    type:'line',
+    data:{
+      labels:labels,
+      datasets:[{label:'PnL',data:pnlData}]
+    }
+  });
+}
+
+loadData();
+setInterval(loadData,5000);
 </script>
-</body></html>
+
+</body>
+</html>
