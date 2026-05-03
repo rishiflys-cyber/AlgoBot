@@ -1,12 +1,14 @@
 
 const express = require("express");
-const fs = require("fs");
 const { KiteConnect } = require("kiteconnect");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 const kc = new KiteConnect({ api_key: process.env.API_KEY });
+
+// MULTI STOCK LIST
+const symbols = ["RELIANCE","INFY","TCS"];
 
 let trades = [];
 
@@ -20,58 +22,68 @@ app.get("/redirect", async (req,res)=>{
   res.send("ACCESS_TOKEN: " + session.access_token + "<br>IP: " + ip);
 });
 
-// AUTO LOOP ENGINE
+// AI SIGNAL (simple scoring)
+function getSignal(price){
+  if(price % 2 === 0) return "BUY";
+  return "SKIP";
+}
+
+// BOT LOOP
 async function runBot(){
   try{
     kc.setAccessToken(process.env.ACCESS_TOKEN);
 
-    const symbol = "RELIANCE";
-    const q = await kc.getQuote([`NSE:${symbol}`]);
-    const price = q[`NSE:${symbol}`].last_price;
+    for(let symbol of symbols){
 
-    // ENTRY CONDITION (simple)
-    if(trades.length === 0){
+      const q = await kc.getQuote([`NSE:${symbol}`]);
+      const price = q[`NSE:${symbol}`].last_price;
 
-      const order = await kc.placeOrder("regular",{
-        exchange:"NSE",
-        tradingsymbol:symbol,
-        transaction_type:"BUY",
-        quantity:1,
-        product:"MIS",
-        order_type:"MARKET"
-      });
+      let existing = trades.find(t => t.symbol === symbol && t.status==="LIVE");
 
-      trades.push({
-        symbol,
-        entry:price,
-        sl:price*0.97,
-        target:price*1.05,
-        order_id:order.order_id,
-        status:"LIVE"
-      });
-    }
+      // ENTRY
+      if(!existing && getSignal(price)==="BUY"){
 
-    // MONITOR + EXIT
-    for(let t of trades){
-      if(t.status==="LIVE"){
+        const order = await kc.placeOrder("regular",{
+          exchange:"NSE",
+          tradingsymbol:symbol,
+          transaction_type:"BUY",
+          quantity:1,
+          product:"MIS",
+          order_type:"MARKET"
+        });
 
-        if(price <= t.sl || price >= t.target){
+        trades.push({
+          symbol,
+          entry:price,
+          sl:price*0.97,
+          target:price*1.05,
+          status:"LIVE",
+          order_id:order.order_id
+        });
+      }
 
-          await kc.placeOrder("regular",{
-            exchange:"NSE",
-            tradingsymbol:t.symbol,
-            transaction_type:"SELL",
-            quantity:1,
-            product:"MIS",
-            order_type:"MARKET"
-          });
+      // EXIT + TRAILING
+      for(let t of trades){
+        if(t.symbol===symbol && t.status==="LIVE"){
 
-          t.status = price <= t.sl ? "SL_HIT" : "TARGET_HIT";
-        }
+          if(price <= t.sl || price >= t.target){
 
-        // TRAILING SL
-        if(price > t.entry*1.02){
-          t.sl = price*0.995;
+            await kc.placeOrder("regular",{
+              exchange:"NSE",
+              tradingsymbol:symbol,
+              transaction_type:"SELL",
+              quantity:1,
+              product:"MIS",
+              order_type:"MARKET"
+            });
+
+            t.status = price <= t.sl ? "SL_HIT" : "TARGET_HIT";
+          }
+
+          // TRAILING
+          if(price > t.entry*1.02){
+            t.sl = price*0.995;
+          }
         }
       }
     }
@@ -81,7 +93,7 @@ async function runBot(){
   }
 }
 
-// LOOP EVERY 10 SECONDS
+// LOOP
 setInterval(runBot,10000);
 
 // PERFORMANCE
@@ -89,10 +101,11 @@ app.get("/performance",(req,res)=>{
   res.json({
     capital:8491.8,
     trades,
-    mode:"V98_FULL_AUTO"
+    symbols,
+    mode:"V99_PRO"
   });
 });
 
-app.get("/",(req,res)=>res.send("V98 AUTO RUNNING"));
+app.get("/",(req,res)=>res.send("V99 PRO RUNNING"));
 
-app.listen(PORT,()=>console.log("V98 FULL AUTO RUNNING"));
+app.listen(PORT,()=>console.log("V99 PRO RUNNING"));
