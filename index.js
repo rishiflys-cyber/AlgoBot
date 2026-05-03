@@ -16,7 +16,6 @@ app.get("/redirect", async (req,res)=>{
     req.query.request_token,
     process.env.API_SECRET
   );
-
   const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
   res.send("ACCESS_TOKEN: "+session.access_token+"<br>IP: "+ip);
 });
@@ -26,133 +25,146 @@ let capital = 8560;
 let trades = [];
 let closedTrades = [];
 
-/* RISK CONFIG */
-const RISK_PER_TRADE = 0.02; // 2%
+/* CONFIG */
+const symbols = {
+  "INFY": 408065,
+  "RELIANCE": 738561,
+  "TCS": 2953217
+};
+
+const RISK_PER_TRADE = 0.02;
+const MAX_CONCURRENT_TRADES = 3;
 
 /* EMA */
 function ema(data, period){
   let k = 2/(period+1);
-  let emaVal = data[0];
+  let val = data[0];
   for(let i=1;i<data.length;i++){
-    emaVal = data[i]*k + emaVal*(1-k);
+    val = data[i]*k + val*(1-k);
   }
-  return emaVal;
+  return val;
 }
 
 /* RSI */
 function rsi(closes){
-  let gains=0, losses=0;
+  let g=0,l=0;
   for(let i=1;i<closes.length;i++){
-    let diff = closes[i]-closes[i-1];
-    if(diff>0) gains+=diff;
-    else losses-=diff;
+    let d=closes[i]-closes[i-1];
+    if(d>0) g+=d; else l-=d;
   }
-  let rs = gains/(losses || 1);
-  return 100 - (100/(1+rs));
+  let rs=g/(l||1);
+  return 100-(100/(1+rs));
 }
 
 /* MARKET */
-async function getMarket(){
+async function getMarket(inst){
   kc.setAccessToken(process.env.ACCESS_TOKEN);
 
-  const inst = 408065;
   const now = new Date();
   const from = new Date(now.getTime() - 60*60*1000);
 
   const candles = await kc.getHistoricalData(inst, from, now, "5minute");
-
   const closes = candles.map(c=>c.close);
-  const price = closes[closes.length-1];
 
+  const price = closes[closes.length-1];
   const r = rsi(closes);
   const e20 = ema(closes,20);
   const e50 = ema(closes,50);
 
-  const trend = e20 > e50 ? "UP":"DOWN";
-  const momentum = price - closes[closes.length-2];
-
-  return { price, rsi:r, trend, momentum };
+  return {
+    price,
+    rsi:r,
+    trend: e20>e50 ? "UP":"DOWN",
+    momentum: price - closes[closes.length-2]
+  };
 }
 
 /* AI */
-function aiDecision(m){
-  let score = 0;
+function ai(m){
+  let score=0;
   if(m.trend==="UP") score+=30;
   if(m.rsi<40) score+=30;
   if(m.momentum>0) score+=20;
 
-  return { action: score>=60?"BUY":"HOLD", confidence: score };
+  return {action: score>=60?"BUY":"HOLD", confidence:score};
 }
 
-/* POSITION SIZING */
-function calculateQty(price, sl){
-  const riskAmount = capital * RISK_PER_TRADE;
-  const slDistance = Math.abs(price - sl);
-
-  if(slDistance === 0) return 1;
-
-  let qty = Math.floor(riskAmount / slDistance);
-
-  return Math.max(qty, 1);
+/* POSITION */
+function qty(price, sl){
+  let risk = capital * RISK_PER_TRADE;
+  let dist = Math.abs(price-sl);
+  return Math.max(Math.floor(risk/(dist||1)),1);
 }
 
 /* LOOP */
 setInterval(async ()=>{
   try{
-    let m = await getMarket();
-    let ai = aiDecision(m);
+    for(let sym in symbols){
 
-    if(!trades.length && ai.action==="BUY"){
+      if(trades.length >= MAX_CONCURRENT_TRADES) break;
 
-      const sl = m.price * 0.97;
-      const target = m.price * 1.05;
-      const qty = calculateQty(m.price, sl);
+      let already = trades.find(t=>t.symbol===sym && t.status==="LIVE");
+      if(already) continue;
 
-      trades.push({
-        symbol:"INFY",
-        entry:m.price,
-        sl,
-        target,
-        qty,
-        status:"LIVE",
-        confidence:ai.confidence
-      });
+      let m = await getMarket(symbols[sym]);
+      let decision = ai(m);
 
-    } 
-    else if(trades.length){
+      if(decision.action==="BUY"){
 
-      let t = trades[0];
-      let price = m.price;
-      let pnl = (price - t.entry) * t.qty;
+        let sl = m.price*0.97;
+        let q = qty(m.price, sl);
 
-      if(price>=t.target || price<=t.sl){
-        t.status="CLOSED";
-        t.exit=price;
-        t.pnl=pnl;
-
-        capital+=pnl;
-        closedTrades.push(t);
-
-        fs.appendFileSync("trades.log", JSON.stringify(t)+"\n");
-        trades=[];
+        trades.push({
+          symbol:sym,
+          entry:m.price,
+          sl,
+          target:m.price*1.05,
+          qty:q,
+          status:"LIVE",
+          confidence:decision.confidence
+        });
       }
     }
 
+    // EXIT LOOP
+    for(let t of trades){
+      if(t.status==="LIVE"){
+
+        let m = await getMarket(symbols[t.symbol]);
+        let price = m.price;
+        let pnl = (price - t.entry)*t.qty;
+
+        if(price>=t.target || price<=t.sl){
+          t.status="CLOSED";
+          t.exit=price;
+          t.pnl=pnl;
+
+          capital+=pnl;
+          closedTrades.push(t);
+
+          fs.appendFileSync("trades.log", JSON.stringify(t)+"\n");
+        }
+      }
+    }
+
+    // CLEAN CLOSED
+    trades = trades.filter(t=>t.status==="LIVE");
+
   }catch(e){
-    console.log("ERR:", e.message);
+    console.log("ERR:",e.message);
   }
 
-},8000);
+},10000);
 
 /* ROUTE */
 app.get("/performance",(req,res)=>{
   res.json({
     capital,
+    active_trades: trades.length,
     trades,
     closedTrades,
-    risk_per_trade:RISK_PER_TRADE,
-    mode:"V115_POSITION_SIZING"
+    mode:"V116_MULTI_STOCK"
   });
 });
 
-app.listen(PORT,()=>console.log("V115 RUNNING"));
+app.listen(PORT,()=>console.log("V116 RUNNING"));
