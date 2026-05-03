@@ -1,102 +1,105 @@
 
 const express = require("express");
 const fs = require("fs");
-const { KiteConnect } = require("kiteconnect");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-const kc = new KiteConnect({ api_key: process.env.API_KEY });
-
-app.use(express.static("public"));
-
-/* LOGIN FIX */
-app.get("/login",(req,res)=>{
-  try{
-    res.redirect(kc.getLoginURL());
-  }catch(e){
-    res.send("Login error: "+e.message);
-  }
-});
-
-app.get("/redirect", async (req,res)=>{
-  try{
-    const session = await kc.generateSession(
-      req.query.request_token,
-      process.env.API_SECRET
-    );
-
-    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || "IP_NOT_FOUND";
-
-    res.send("ACCESS_TOKEN: "+session.access_token+"<br>IP: "+ip);
-  }catch(e){
-    res.send("Redirect error: "+e.message);
-  }
-});
-
-/* CORE */
-let capital = 8491.8;
+/* CORE STATE */
+let capital = 8551.34;
 let trades = [];
 let closedTrades = [];
 
-/* LOGGING */
-function logTrade(trade){
-  const line = JSON.stringify(trade) + "\n";
-  fs.appendFileSync("trades.log", line);
+/* 🧠 AI DECISION ENGINE */
+function aiDecisionEngine(market){
+
+  let decision = {
+    action: "HOLD",
+    confidence: 0
+  };
+
+  // Trend detection
+  if(market.trend === "UP") decision.confidence += 30;
+  if(market.trend === "DOWN") decision.confidence += 30;
+
+  // RSI logic
+  if(market.rsi < 40) decision.confidence += 30;
+  if(market.rsi > 60) decision.confidence += 30;
+
+  // Momentum
+  if(market.momentum > 0) decision.confidence += 20;
+
+  // Final decision
+  if(decision.confidence >= 60){
+    decision.action = market.trend === "UP" ? "BUY" : "SELL";
+  }
+
+  return decision;
 }
 
-/* ALERT (console for now) */
-function sendAlert(msg){
-  console.log("ALERT:", msg);
+/* MARKET SIMULATION */
+function getMarket(){
+  return {
+    price: 100 + Math.random()*20,
+    rsi: Math.random()*100,
+    trend: Math.random() > 0.5 ? "UP":"DOWN",
+    momentum: Math.random()*2 - 1
+  };
 }
 
-/* SIM ENGINE */
+/* ENGINE LOOP */
 setInterval(()=>{
-  let price = 100 + Math.random()*20;
 
-  if(trades.length === 0){
+  let market = getMarket();
+  let ai = aiDecisionEngine(market);
+
+  if(trades.length === 0 && ai.action === "BUY"){
+
     let t = {
       symbol:"INFY",
-      entry:price,
-      sl:price*0.97,
-      target:price*1.05,
-      status:"LIVE"
+      entry:market.price,
+      sl:market.price*0.97,
+      target:market.price*1.05,
+      status:"LIVE",
+      aiConfidence: ai.confidence
     };
-    trades.push(t);
-    sendAlert("BUY "+t.symbol+" @ "+t.entry);
-  }else{
-    let t = trades[0];
 
+    trades.push(t);
+    console.log("AI BUY", t);
+
+  } else if(trades.length){
+
+    let t = trades[0];
+    let price = market.price;
     let pnl = price - t.entry;
 
     if(price >= t.target || price <= t.sl){
-      t.status="CLOSED";
+
+      t.status = "CLOSED";
       t.exit = price;
       t.pnl = pnl;
 
       capital += pnl;
       closedTrades.push(t);
 
-      logTrade(t);
-      sendAlert("EXIT "+t.symbol+" PnL: "+pnl);
+      fs.appendFileSync("trades.log", JSON.stringify(t)+"\n");
 
-      trades=[];
+      console.log("AI EXIT", t);
+
+      trades = [];
     }
   }
-},8000);
+
+},5000);
 
 /* ROUTES */
 app.get("/performance",(req,res)=>{
-  res.json({capital, trades, closedTrades, mode:"V111_ALERT_LOG"});
+  res.json({
+    capital,
+    trades,
+    closedTrades,
+    mode:"V112_AI_ENGINE"
+  });
 });
 
-app.get("/logs",(req,res)=>{
-  try{
-    const data = fs.readFileSync("trades.log","utf8");
-    res.send(data);
-  }catch{
-    res.send("No logs yet");
-  }
-});
-
-app.listen(PORT,()=>console.log("V111 RUNNING"));
+app.listen(PORT,()=>console.log("V112 AI ENGINE RUNNING"));
