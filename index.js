@@ -19,15 +19,11 @@ app.get("/redirect", async (req,res)=>{
 
 // PERFORMANCE
 app.get("/performance", async (req,res)=>{
-  try{
-    kc.setAccessToken(process.env.ACCESS_TOKEN);
-    const engine = require("./engine/liveEngine");
-    const result = await engine.run(kc, 8491.8);
-    res.json({capital:8491.8,...result});
-  }catch(e){
-    res.json({error:e.message});
-  }
+  kc.setAccessToken(process.env.ACCESS_TOKEN);
+  const engine = require("./engine/liveEngine");
+  const result = await engine.run(kc, 8491.8);
+  res.json({capital:8491.8,...result});
 });
 
 app.use(express.static(path.join(__dirname,"public")));
-app.listen(PORT,()=>console.log("V90 SMART AGGRESSIVE RUNNING"));
+app.listen(PORT,()=>console.log("V91 INSTITUTION MODE RUNNING"));

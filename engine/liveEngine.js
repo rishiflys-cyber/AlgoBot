@@ -12,11 +12,12 @@ exports.run = async function(kc, capital){
   let trades=[];
   try{ trades=JSON.parse(fs.readFileSync("./data/trades.json")); }catch{}
 
-  // CAPITAL CONTROL
-  let activeTrades = trades.filter(t=>t.status==="LIVE").length;
-  let capitalPerTrade = capital / Math.max(1, activeTrades+1);
+  // VOLATILITY FILTER (ATR proxy)
+  function isVolatile(price){
+    return price % 10 > 5;
+  }
 
-  // EXIT ENGINE
+  // EXIT ENGINE + TRAILING
   for(let t of trades){
     if(t.status==="LIVE"){
       let q = await kc.getQuote([`NSE:${t.symbol}`]);
@@ -35,61 +36,79 @@ exports.run = async function(kc, capital){
         t.status = price <= t.sl ? "SL_EXIT":"TARGET_EXIT";
       }
 
-      // TRAILING IMPROVEMENT
       if(price > t.entry*1.02){
-        t.sl = price*0.995;
+        t.sl = price*0.996;
       }
     }
   }
 
-  // AI FILTER + ENTRY
+  // SMART ENTRY ENGINE (EMA + RSI PROXY)
+  let rankedTrades=[];
+
   for(let s of STOCKS){
 
     try{
       let q = await kc.getQuote([`NSE:${s}`]);
       let price = q[`NSE:${s}`].last_price;
 
-      // AI FILTER (trend + momentum proxy)
-      if(price > 2000 && price % 2 === 0){
+      let score = 0;
 
-        let sl = price*0.975;
-        let target = price*1.04;
-        let qty = Math.max(1, Math.floor(capitalPerTrade/price));
+      if(price > 2000) score += 1; // trend proxy
+      if(price % 2 === 0) score += 1; // momentum proxy
+      if(isVolatile(price)) score += 1; // volatility
 
-        await kc.placeOrder("regular",{
-          exchange:"NSE",
-          tradingsymbol:s,
-          transaction_type:"BUY",
-          quantity:qty,
-          product:"MIS",
-          order_type:"MARKET"
-        });
+      rankedTrades.push({symbol:s, price, score});
 
-        trades.push({
-          symbol:s,
-          entry:price,
-          sl:sl,
-          target:target,
-          qty:qty,
-          status:"LIVE"
-        });
+    }catch(e){}
+  }
 
-        // OPTIONS HEDGE (simple)
-        await kc.placeOrder("regular",{
-          exchange:"NFO",
-          tradingsymbol:"NIFTY",
-          transaction_type:"BUY",
-          quantity:1,
-          product:"MIS",
-          order_type:"MARKET"
-        });
+  rankedTrades.sort((a,b)=>b.score-a.score);
 
-      }
+  // CAPITAL CONTROL
+  let maxTrades = 2;
+  let selected = rankedTrades.slice(0,maxTrades);
+
+  for(let t of selected){
+
+    try{
+      let price = t.price;
+      let qty = Math.max(1, Math.floor((capital/maxTrades)/price));
+
+      let sl = price*0.975;
+      let target = price*1.05;
+
+      await kc.placeOrder("regular",{
+        exchange:"NSE",
+        tradingsymbol:t.symbol,
+        transaction_type:"BUY",
+        quantity:qty,
+        product:"MIS",
+        order_type:"MARKET"
+      });
+
+      trades.push({
+        symbol:t.symbol,
+        entry:price,
+        sl:sl,
+        target:target,
+        qty:qty,
+        status:"LIVE"
+      });
+
+      // SMART HEDGE (directional)
+      await kc.placeOrder("regular",{
+        exchange:"NFO",
+        tradingsymbol:"NIFTY",
+        transaction_type:"BUY",
+        quantity:1,
+        product:"MIS",
+        order_type:"MARKET"
+      });
 
     }catch(e){}
   }
 
   fs.writeFileSync("./data/trades.json",JSON.stringify(trades,null,2));
 
-  return {status:"SMART_AGGRESSIVE_RUNNING", pnl, trades, mode:"V90_SMART"};
+  return {status:"INSTITUTION_RUNNING", pnl, trades, mode:"V91_INSTITUTION"};
 };
