@@ -18,6 +18,8 @@ router.get("/redirect", async (req,res)=>{
 
         const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
+        process.env.ACCESS_TOKEN = session.access_token;
+
         res.send("ACCESS_TOKEN: "+session.access_token+"<br>IP: "+ip);
 
     }catch(e){

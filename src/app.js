@@ -8,6 +8,6 @@ const perfRoutes = require("./routes/performance");
 app.use("/", loginRoutes);
 app.use("/", perfRoutes);
 
-app.get("/", (req,res)=> res.send("AlgoBot Railway Ready"));
+app.get("/", (req,res)=> res.send("FINAL ENGINE RUNNING"));
 
 module.exports = app;
