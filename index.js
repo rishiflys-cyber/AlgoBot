@@ -8,7 +8,6 @@ const PORT = process.env.PORT || 3000;
 
 const kc = new KiteConnect({ api_key: process.env.API_KEY });
 
-// LOGIN
 app.get("/login",(req,res)=>res.redirect(kc.getLoginURL()));
 
 app.get("/redirect", async (req,res)=>{
@@ -17,7 +16,6 @@ app.get("/redirect", async (req,res)=>{
   res.send("ACCESS_TOKEN: "+session.access_token+"<br>IP: "+ip);
 });
 
-// PERFORMANCE
 app.get("/performance", async (req,res)=>{
   kc.setAccessToken(process.env.ACCESS_TOKEN);
   const engine = require("./engine/liveEngine");
@@ -26,4 +24,4 @@ app.get("/performance", async (req,res)=>{
 });
 
 app.use(express.static(path.join(__dirname,"public")));
-app.listen(PORT,()=>console.log("V93 RUNNING"));
+app.listen(PORT,()=>console.log("V94 ELITE RUNNING"));
