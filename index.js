@@ -12,7 +12,11 @@ const kc = new KiteConnect({ api_key: process.env.API_KEY });
 app.get("/login",(req,res)=>res.redirect(kc.getLoginURL()));
 
 app.get("/redirect", async (req,res)=>{
-  const session = await kc.generateSession(req.query.request_token, process.env.API_SECRET);
+  const session = await kc.generateSession(
+    req.query.request_token,
+    process.env.API_SECRET
+  );
+
   const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
   res.send("ACCESS_TOKEN: "+session.access_token+"<br>IP: "+ip);
 });
@@ -21,6 +25,9 @@ app.get("/redirect", async (req,res)=>{
 let capital = 8560;
 let trades = [];
 let closedTrades = [];
+
+/* RISK CONFIG */
+const RISK_PER_TRADE = 0.02; // 2%
 
 /* EMA */
 function ema(data, period){
@@ -44,11 +51,11 @@ function rsi(closes){
   return 100 - (100/(1+rs));
 }
 
-/* REAL MARKET DATA */
+/* MARKET */
 async function getMarket(){
   kc.setAccessToken(process.env.ACCESS_TOKEN);
 
-  const inst = 408065; // INFY
+  const inst = 408065;
   const now = new Date();
   const from = new Date(now.getTime() - 60*60*1000);
 
@@ -77,6 +84,18 @@ function aiDecision(m){
   return { action: score>=60?"BUY":"HOLD", confidence: score };
 }
 
+/* POSITION SIZING */
+function calculateQty(price, sl){
+  const riskAmount = capital * RISK_PER_TRADE;
+  const slDistance = Math.abs(price - sl);
+
+  if(slDistance === 0) return 1;
+
+  let qty = Math.floor(riskAmount / slDistance);
+
+  return Math.max(qty, 1);
+}
+
 /* LOOP */
 setInterval(async ()=>{
   try{
@@ -84,21 +103,27 @@ setInterval(async ()=>{
     let ai = aiDecision(m);
 
     if(!trades.length && ai.action==="BUY"){
+
+      const sl = m.price * 0.97;
+      const target = m.price * 1.05;
+      const qty = calculateQty(m.price, sl);
+
       trades.push({
         symbol:"INFY",
         entry:m.price,
-        sl:m.price*0.97,
-        target:m.price*1.05,
+        sl,
+        target,
+        qty,
         status:"LIVE",
-        confidence:ai.confidence,
-        rsi:m.rsi,
-        trend:m.trend
+        confidence:ai.confidence
       });
+
     } 
     else if(trades.length){
+
       let t = trades[0];
       let price = m.price;
-      let pnl = price - t.entry;
+      let pnl = (price - t.entry) * t.qty;
 
       if(price>=t.target || price<=t.sl){
         t.status="CLOSED";
@@ -112,6 +137,7 @@ setInterval(async ()=>{
         trades=[];
       }
     }
+
   }catch(e){
     console.log("ERR:", e.message);
   }
@@ -120,7 +146,13 @@ setInterval(async ()=>{
 
 /* ROUTE */
 app.get("/performance",(req,res)=>{
-  res.json({capital,trades,closedTrades,mode:"V114_REAL_INDICATORS"});
+  res.json({
+    capital,
+    trades,
+    closedTrades,
+    risk_per_trade:RISK_PER_TRADE,
+    mode:"V115_POSITION_SIZING"
+  });
 });
 
-app.listen(PORT,()=>console.log("V114 RUNNING"));
+app.listen(PORT,()=>console.log("V115 RUNNING"));
