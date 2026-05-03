@@ -1,18 +1,51 @@
 
 const express = require("express");
 const fs = require("fs");
+const { KiteConnect } = require("kiteconnect");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-/* CORE */
+const kc = new KiteConnect({ api_key: process.env.API_KEY });
+
+/* ===== FIXED CORE ROUTES (NEVER REMOVE AGAIN) ===== */
+
+app.get("/login",(req,res)=>{
+  try{
+    res.redirect(kc.getLoginURL());
+  }catch(e){
+    res.send("Login error: " + e.message);
+  }
+});
+
+app.get("/redirect", async (req,res)=>{
+  try{
+    const session = await kc.generateSession(
+      req.query.request_token,
+      process.env.API_SECRET
+    );
+
+    const ip =
+      req.headers['x-forwarded-for'] ||
+      req.socket.remoteAddress ||
+      "IP_NOT_FOUND";
+
+    res.send("ACCESS_TOKEN: " + session.access_token + "<br>IP: " + ip);
+
+  }catch(e){
+    res.send("Redirect error: " + e.message);
+  }
+});
+
+/* ===== CORE ENGINE ===== */
+
 let capital = 8560;
 let trades = [];
 let closedTrades = [];
 
-/* PERFORMANCE ENGINE */
-function getStats(){
+/* ===== PERFORMANCE ENGINE ===== */
 
+function getStats(){
   let total = closedTrades.length;
   let wins = closedTrades.filter(t=>t.pnl>0).length;
   let losses = closedTrades.filter(t=>t.pnl<=0).length;
@@ -21,64 +54,36 @@ function getStats(){
 
   let totalPnL = closedTrades.reduce((a,b)=>a+b.pnl,0);
 
-  let avgWin = wins ? closedTrades.filter(t=>t.pnl>0)
-                  .reduce((a,b)=>a+b.pnl,0)/wins : 0;
-
-  let avgLoss = losses ? closedTrades.filter(t=>t.pnl<=0)
-                  .reduce((a,b)=>a+b.pnl,0)/losses : 0;
-
   return {
     totalTrades: total,
     wins,
     losses,
-    winRate: winRate.toFixed(2)+"%",
-    totalPnL: totalPnL.toFixed(2),
-    avgWin: avgWin.toFixed(2),
-    avgLoss: avgLoss.toFixed(2)
+    winRate: winRate.toFixed(2) + "%",
+    totalPnL: totalPnL.toFixed(2)
   };
 }
 
-/* SIMPLE AUTO OPTIMIZER */
 function suggest(){
-
   let stats = getStats();
-
-  let suggestion = [];
+  let suggestions = [];
 
   if(parseFloat(stats.winRate) < 50){
-    suggestion.push("👉 Improve entry filter (increase confidence threshold)");
-  }
-
-  if(parseFloat(stats.avgLoss) < -parseFloat(stats.avgWin)){
-    suggestion.push("👉 Tighten SL or improve RR ratio");
+    suggestions.push("Improve entry filter");
   }
 
   if(stats.totalTrades < 5){
-    suggestion.push("👉 Increase trade frequency (lower score threshold)");
+    suggestions.push("Increase trade frequency");
   }
 
-  if(suggestion.length === 0){
-    suggestion.push("✅ Strategy looks stable");
+  if(suggestions.length === 0){
+    suggestions.push("Strategy stable");
   }
 
-  return suggestion;
+  return suggestions;
 }
 
-/* SIMULATION FOR TEST */
-setInterval(()=>{
-  let pnl = Math.random()>0.5 ? 120 : -80;
+/* ===== SAFE PERFORMANCE ROUTE ===== */
 
-  let trade = {
-    symbol:"TEST",
-    pnl
-  };
-
-  closedTrades.push(trade);
-  capital += pnl;
-
-},15000);
-
-/* ROUTES */
 app.get("/performance",(req,res)=>{
   res.json({
     capital,
@@ -86,8 +91,13 @@ app.get("/performance",(req,res)=>{
     closedTrades,
     stats: getStats(),
     suggestions: suggest(),
-    mode:"V117_PERFORMANCE_TUNER"
+    mode: "V117_FIXED"
   });
 });
 
-app.listen(PORT,()=>console.log("V117 RUNNING"));
+/* ROOT */
+app.get("/",(req,res)=>{
+  res.send("AlgoBot running (V117 FIXED)");
+});
+
+app.listen(PORT,()=>console.log("RUNNING FIXED"));
