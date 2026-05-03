@@ -7,7 +7,16 @@ const PORT = process.env.PORT || 3000;
 
 const kc = new KiteConnect({ api_key: process.env.API_KEY });
 
-// LOGIN
+// FORMAT DATE FOR ZERODHA (CRITICAL FIX)
+function formatDate(date){
+  const pad = (n)=> n<10 ? "0"+n : n;
+  return date.getFullYear() + "-" +
+    pad(date.getMonth()+1) + "-" +
+    pad(date.getDate()) + " " +
+    pad(date.getHours()) + ":" +
+    pad(date.getMinutes()) + ":00";
+}
+
 app.get("/login",(req,res)=>res.redirect(kc.getLoginURL()));
 
 app.get("/redirect", async (req,res)=>{
@@ -20,7 +29,6 @@ app.get("/redirect", async (req,res)=>{
   }
 });
 
-// PERFORMANCE
 app.get("/performance", async (req,res)=>{
   try{
     kc.setAccessToken(process.env.ACCESS_TOKEN);
@@ -30,16 +38,18 @@ app.get("/performance", async (req,res)=>{
     const now = new Date();
     const from = new Date(now.getTime() - 3*60*60*1000);
 
-    // FIX: pass Date objects directly (NOT ISO string)
+    const fromStr = formatDate(from);
+    const toStr = formatDate(now);
+
     const candles = await kc.getHistoricalData(
       instrument,
-      from,
-      now,
+      fromStr,
+      toStr,
       "5minute"
     );
 
     if(!candles || candles.length < 10){
-      return res.json({status:"NO_DATA", mode:"V95_FULL"});
+      return res.json({status:"NO_DATA", from:fromStr, to:toStr});
     }
 
     const closes = candles.map(c=>c.close);
@@ -69,7 +79,6 @@ app.get("/performance", async (req,res)=>{
 
     let trend = ema20 > ema50 ? "BULLISH":"BEARISH";
 
-    // SIMPLE EXECUTION LOGIC (SAFE)
     let signal = "NO_TRADE";
 
     if(rsi < 35 && trend==="BULLISH"){
@@ -80,14 +89,16 @@ app.get("/performance", async (req,res)=>{
 
     res.json({
       capital:8491.8,
-      rsi:rsi,
-      ema20:ema20,
-      ema50:ema50,
-      trend:trend,
-      signal:signal,
+      rsi,
+      ema20,
+      ema50,
+      trend,
+      signal,
       candles:closes.length,
-      status:"STABLE_RUNNING",
-      mode:"V95_FULL"
+      from:fromStr,
+      to:toStr,
+      status:"FIXED_RUNNING",
+      mode:"V95_FINAL"
     });
 
   }catch(e){
@@ -95,4 +106,4 @@ app.get("/performance", async (req,res)=>{
   }
 });
 
-app.listen(PORT,()=>console.log("V95 FULL RUNNING"));
+app.listen(PORT,()=>console.log("V95 FINAL FIX RUNNING"));
