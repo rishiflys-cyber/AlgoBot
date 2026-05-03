@@ -16,25 +16,17 @@ app.get("/redirect", async (req,res)=>{
   res.send("ACCESS_TOKEN: "+session.access_token+"<br>IP: "+ip);
 });
 
-// PERFORMANCE
+// ENGINE
 app.get("/performance", async (req,res)=>{
   try{
     kc.setAccessToken(process.env.ACCESS_TOKEN);
-
     const engine = require("./engine/liveEngine");
     const result = await engine.run(kc, 8491.8);
-
-    res.json({
-      capital:8491.8,
-      ...result
-    });
-
+    res.json({ capital:8491.8, ...result });
   }catch(e){
     res.json({error:e.message});
   }
 });
 
 app.use(express.static(path.join(__dirname,"public")));
-app.get("/", (req,res)=>res.sendFile(path.join(__dirname,"public","index.html")));
-
-app.listen(PORT,()=>console.log("V87 RUNNING"));
+app.listen(PORT,()=>console.log("V88 RUNNING"));
