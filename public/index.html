@@ -2,47 +2,38 @@
 <!DOCTYPE html>
 <html>
 <head>
-<title>AlgoBot Dashboard</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<title>AlgoBot Terminal</title>
 <style>
-body { font-family: Arial; background:#111; color:#fff; }
-.card { background:#222; padding:20px; margin:10px; border-radius:10px; }
+body{background:#0d1117;color:#fff;font-family:Arial}
+.box{background:#161b22;padding:15px;margin:10px;border-radius:8px}
 </style>
 </head>
 <body>
 
-<h2>🚀 AlgoBot Dashboard</h2>
+<h2>🚀 AlgoBot Live Terminal</h2>
 
-<div class="card" id="stats"></div>
-
-<canvas id="chart" height="100"></canvas>
+<div class="box" id="capital"></div>
+<div class="box" id="live"></div>
+<div class="box" id="history"></div>
 
 <script>
-async function loadData(){
-  const res = await fetch('/api/data');
-  const data = await res.json();
+async function load(){
 
-  document.getElementById('stats').innerHTML = `
-    Capital: ${data.capital.toFixed(2)}<br>
-    Trades: ${data.stats.total}<br>
-    Win Rate: ${data.stats.winRate.toFixed(2)}%<br>
-    PnL: ${data.stats.totalPnL}
-  `;
+  let perf = await fetch('/performance').then(r=>r.json());
+  document.getElementById('capital').innerHTML = 
+    "Capital: " + perf.capital;
 
-  const pnlData = data.trades.map(t=>t.pnl);
-  const labels = data.trades.map((_,i)=>i+1);
+  let live = await fetch('/api/live').then(r=>r.json());
+  document.getElementById('live').innerHTML = 
+    "<b>Live Trades:</b><br>" + JSON.stringify(live.trades,null,2);
 
-  new Chart(document.getElementById('chart'),{
-    type:'line',
-    data:{
-      labels:labels,
-      datasets:[{label:'PnL',data:pnlData}]
-    }
-  });
+  let hist = await fetch('/api/history').then(r=>r.json());
+  document.getElementById('history').innerHTML = 
+    "<b>Trade History:</b><br>" + JSON.stringify(hist.closedTrades,null,2);
 }
 
-loadData();
-setInterval(loadData,5000);
+setInterval(load,3000);
+load();
 </script>
 
 </body>
