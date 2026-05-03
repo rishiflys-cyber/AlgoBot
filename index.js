@@ -24,4 +24,4 @@ app.get("/performance", async (req,res)=>{
 });
 
 app.use(express.static(path.join(__dirname,"public")));
-app.listen(PORT,()=>console.log("V94 ELITE RUNNING"));
+app.listen(PORT,()=>console.log("V95 DATA ENGINE RUNNING"));

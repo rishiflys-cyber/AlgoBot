@@ -1,12 +1,24 @@
 
 const fs = require("fs");
 
-// EMA calculation
-function ema(prices, period){
+// REAL RSI
+function calculateRSI(closes){
+  let gains=0, losses=0;
+  for(let i=1;i<closes.length;i++){
+    let diff = closes[i]-closes[i-1];
+    if(diff>0) gains+=diff;
+    else losses-=diff;
+  }
+  let rs = gains/(losses||1);
+  return 100 - (100/(1+rs));
+}
+
+// EMA
+function ema(data, period){
   let k = 2/(period+1);
-  let ema = prices[0];
-  for(let i=1;i<prices.length;i++){
-    ema = prices[i]*k + ema*(1-k);
+  let ema = data[0];
+  for(let i=1;i<data.length;i++){
+    ema = data[i]*k + ema*(1-k);
   }
   return ema;
 }
@@ -20,27 +32,31 @@ exports.run = async function(kc, capital){
   let trades=[];
   try{ trades=JSON.parse(fs.readFileSync("./data/trades.json")); }catch{}
 
-  let q = await kc.getQuote(["NSE:NIFTY 50"]);
-  let spot = q["NSE:NIFTY 50"].last_price;
+  // FETCH REAL HISTORICAL DATA
+  const instrument = 256265; // NIFTY
+  const now = new Date();
+  const from = new Date(now.getTime() - 60*60*1000); // last 1 hour
 
-  // fake candles for EMA (structure ready)
-  let prices = [spot*0.98, spot*0.99, spot, spot*1.01, spot*1.02];
+  const candles = await kc.getHistoricalData(
+    instrument,
+    from,
+    now,
+    "5minute"
+  );
 
-  let ema20 = ema(prices,20);
-  let ema50 = ema(prices,50);
+  const closes = candles.map(c=>c.close);
+
+  if(closes.length < 10){
+    return {status:"NO_DATA", mode:"V95_DATA"};
+  }
+
+  const rsi = calculateRSI(closes);
+  const ema20 = ema(closes,20);
+  const ema50 = ema(closes,50);
 
   let trend = ema20 > ema50 ? "BULLISH":"BEARISH";
 
-  // TIME FILTER (avoid early volatility)
-  let now = new Date().toLocaleString("en-US",{timeZone:"Asia/Kolkata"});
-  let d = new Date(now);
-  let minutes = d.getHours()*60 + d.getMinutes();
-
-  if(minutes < 570 || minutes > 900){
-    return {status:"NO_TRADE_TIME_FILTER", mode:"V94_ELITE"};
-  }
-
-  // EXIT ENGINE
+  // EXIT
   for(let t of trades){
     if(t.status==="LIVE"){
       let q = await kc.getQuote([`${t.exchange}:${t.symbol}`]);
@@ -58,24 +74,21 @@ exports.run = async function(kc, capital){
 
         t.status = price <= t.sl ? "SL_EXIT":"TARGET_EXIT";
       }
-
-      // tighter trailing
-      if(price > t.entry*1.02){
-        t.sl = price*0.997;
-      }
     }
   }
 
-  // ENTRY (ELITE OPTIONS LOGIC)
+  // ENTRY CONDITION (REAL)
   if(positions.net.length===0){
 
-    const strike = Math.round(spot/50)*50;
+    if(rsi < 35 || rsi > 65){
 
-    let symbol = trend==="BULLISH"
-      ? `NIFTY${strike}CE`
-      : `NIFTY${strike}PE`;
+      const spot = closes[closes.length-1];
+      const strike = Math.round(spot/50)*50;
 
-    try{
+      let symbol = trend==="BULLISH"
+        ? `NIFTY${strike}CE`
+        : `NIFTY${strike}PE`;
+
       await kc.placeOrder("regular",{
         exchange:"NFO",
         tradingsymbol:symbol,
@@ -91,15 +104,21 @@ exports.run = async function(kc, capital){
         entry:spot,
         sl:spot*0.97,
         target:spot*1.06,
-        qty:1,
+        rsi:rsi,
         trend:trend,
         status:"LIVE"
       });
-
-    }catch(e){}
+    }
   }
 
   fs.writeFileSync("./data/trades.json",JSON.stringify(trades,null,2));
 
-  return {status:"ELITE_RUNNING", pnl, trend, trades, mode:"V94_ELITE"};
+  return {
+    status:"DATA_DRIVEN_RUNNING",
+    pnl,
+    rsi,
+    trend,
+    trades,
+    mode:"V95_DATA"
+  };
 };
