@@ -26,4 +26,4 @@ app.get("/performance", async (req,res)=>{
 });
 
 app.use(express.static(path.join(__dirname,"public")));
-app.listen(PORT,()=>console.log("V91 INSTITUTION MODE RUNNING"));
+app.listen(PORT,()=>console.log("V92 QUANT RUNNING"));

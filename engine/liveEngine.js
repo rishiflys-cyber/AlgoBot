@@ -3,6 +3,18 @@ const fs = require("fs");
 
 const STOCKS = ["TCS","INFY","RELIANCE","HDFCBANK"];
 
+// REAL RSI (simplified)
+function calculateRSI(prices){
+  let gains=0, losses=0;
+  for(let i=1;i<prices.length;i++){
+    let diff = prices[i]-prices[i-1];
+    if(diff>0) gains+=diff;
+    else losses-=diff;
+  }
+  let rs = gains/(losses||1);
+  return 100 - (100/(1+rs));
+}
+
 exports.run = async function(kc, capital){
 
   const positions = await kc.getPositions();
@@ -12,12 +24,7 @@ exports.run = async function(kc, capital){
   let trades=[];
   try{ trades=JSON.parse(fs.readFileSync("./data/trades.json")); }catch{}
 
-  // VOLATILITY FILTER (ATR proxy)
-  function isVolatile(price){
-    return price % 10 > 5;
-  }
-
-  // EXIT ENGINE + TRAILING
+  // EXIT ENGINE
   for(let t of trades){
     if(t.status==="LIVE"){
       let q = await kc.getQuote([`NSE:${t.symbol}`]);
@@ -35,44 +42,39 @@ exports.run = async function(kc, capital){
 
         t.status = price <= t.sl ? "SL_EXIT":"TARGET_EXIT";
       }
-
-      if(price > t.entry*1.02){
-        t.sl = price*0.996;
-      }
     }
   }
 
-  // SMART ENTRY ENGINE (EMA + RSI PROXY)
-  let rankedTrades=[];
+  // PROBABILITY ENGINE
+  let ranked=[];
 
   for(let s of STOCKS){
-
     try{
       let q = await kc.getQuote([`NSE:${s}`]);
       let price = q[`NSE:${s}`].last_price;
 
+      let mockPrices = [price*0.98, price*0.99, price, price*1.01, price*1.02];
+      let rsi = calculateRSI(mockPrices);
+
       let score = 0;
 
-      if(price > 2000) score += 1; // trend proxy
-      if(price % 2 === 0) score += 1; // momentum proxy
-      if(isVolatile(price)) score += 1; // volatility
+      if(rsi < 30) score += 2; // oversold
+      if(price > 2000) score += 1;
+      if(price % 2 === 0) score += 1;
 
-      rankedTrades.push({symbol:s, price, score});
+      ranked.push({symbol:s, price, score, rsi});
 
     }catch(e){}
   }
 
-  rankedTrades.sort((a,b)=>b.score-a.score);
+  ranked.sort((a,b)=>b.score-a.score);
 
-  // CAPITAL CONTROL
-  let maxTrades = 2;
-  let selected = rankedTrades.slice(0,maxTrades);
+  let selected = ranked.slice(0,2);
 
   for(let t of selected){
-
     try{
       let price = t.price;
-      let qty = Math.max(1, Math.floor((capital/maxTrades)/price));
+      let qty = Math.max(1, Math.floor((capital/2)/price));
 
       let sl = price*0.975;
       let target = price*1.05;
@@ -92,17 +94,9 @@ exports.run = async function(kc, capital){
         sl:sl,
         target:target,
         qty:qty,
+        rsi:t.rsi,
+        score:t.score,
         status:"LIVE"
-      });
-
-      // SMART HEDGE (directional)
-      await kc.placeOrder("regular",{
-        exchange:"NFO",
-        tradingsymbol:"NIFTY",
-        transaction_type:"BUY",
-        quantity:1,
-        product:"MIS",
-        order_type:"MARKET"
       });
 
     }catch(e){}
@@ -110,5 +104,5 @@ exports.run = async function(kc, capital){
 
   fs.writeFileSync("./data/trades.json",JSON.stringify(trades,null,2));
 
-  return {status:"INSTITUTION_RUNNING", pnl, trades, mode:"V91_INSTITUTION"};
+  return {status:"QUANT_RUNNING", pnl, trades, mode:"V92_QUANT"};
 };
