@@ -7,76 +7,54 @@ const PORT = process.env.PORT || 3000;
 
 const kc = new KiteConnect({ api_key: process.env.API_KEY });
 
-/* ================= LOGIN ================= */
-
-app.get("/login",(req,res)=>{
-  try{
-    const url = kc.getLoginURL();
-    res.redirect(url);
-  }catch(e){
-    res.send("Login Error: " + e.message);
-  }
-});
+/* LOGIN */
+app.get("/login",(req,res)=>res.redirect(kc.getLoginURL()));
 
 app.get("/redirect", async (req,res)=>{
-  try{
-    const session = await kc.generateSession(
-      req.query.request_token,
-      process.env.API_SECRET
-    );
-
-    const ip =
-      req.headers['x-forwarded-for'] ||
-      req.socket.remoteAddress ||
-      "IP_NOT_FOUND";
-
-    res.send("ACCESS_TOKEN: " + session.access_token + "<br>IP: " + ip);
-
-  }catch(e){
-    res.send("Redirect Error: " + e.message);
-  }
+  const session = await kc.generateSession(req.query.request_token, process.env.API_SECRET);
+  const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+  res.send("ACCESS_TOKEN: " + session.access_token + "<br>IP: " + ip);
 });
 
-/* ================= SMART BOT ================= */
-
+/* CONFIG */
 const symbols = ["RELIANCE","INFY","TCS","HDFCBANK"];
 let trades = [];
 let capital = 8491.8;
 
-function calculateRSI(closes){
-  let gains=0, losses=0;
+/* INDICATORS */
+function rsi(closes){
+  let g=0,l=0;
   for(let i=1;i<closes.length;i++){
-    let diff = closes[i]-closes[i-1];
-    if(diff>0) gains+=diff;
-    else losses-=diff;
+    let d=closes[i]-closes[i-1];
+    if(d>0) g+=d; else l-=d;
   }
-  let rs = gains/(losses||1);
-  return 100 - (100/(1+rs));
+  let rs=g/(l||1);
+  return 100-(100/(1+rs));
 }
 
-function ema(data, period){
-  let k = 2/(period+1);
-  let e = data[0];
-  for(let i=1;i<data.length;i++){
-    e = data[i]*k + e*(1-k);
-  }
+function ema(data,p){
+  let k=2/(p+1), e=data[0];
+  for(let i=1;i<data.length;i++) e=data[i]*k+e*(1-k);
   return e;
 }
 
-function getSmartSignal(rsi, trend, price, prevPrice){
-  let momentum = price - prevPrice;
+/* 🔥 PRO SIGNAL ENGINE */
+function scoreSignal(rsiVal, trend, momentum){
+  let score = 0;
 
-  if(rsi < 45 && trend === "UP" && momentum > 0){
-    return "BUY";
-  }
+  if(rsiVal < 45) score += 30;
+  if(rsiVal < 40) score += 10;
 
-  if(rsi > 55 && trend === "DOWN" && momentum < 0){
-    return "SELL";
-  }
+  if(trend === "UP") score += 30;
 
-  return "SKIP";
+  if(momentum > 0) score += 20;
+
+  if(momentum > 0.2) score += 10;
+
+  return score;
 }
 
+/* BOT */
 async function runBot(){
   try{
     kc.setAccessToken(process.env.ACCESS_TOKEN);
@@ -90,35 +68,32 @@ async function runBot(){
 
     for(let symbol of symbols){
 
-      const instrument = instrumentMap[symbol];
+      const inst = instrumentMap[symbol];
 
       const now = new Date();
       const from = new Date(now.getTime() - 60*60*1000);
 
-      const candles = await kc.getHistoricalData(
-        instrument,
-        from,
-        now,
-        "5minute"
-      );
-
+      const candles = await kc.getHistoricalData(inst, from, now, "5minute");
       if(!candles || candles.length < 20) continue;
 
       const closes = candles.map(c=>c.close);
 
-      const rsi = calculateRSI(closes);
-      const ema20 = ema(closes,20);
-      const ema50 = ema(closes,50);
-      const trend = ema20 > ema50 ? "UP" : "DOWN";
+      const r = rsi(closes);
+      const e20 = ema(closes,20);
+      const e50 = ema(closes,50);
+      const trend = e20 > e50 ? "UP" : "DOWN";
 
       const price = closes[closes.length-1];
-      const prevPrice = closes[closes.length-2];
+      const prev = closes[closes.length-2];
+      const momentum = price - prev;
 
-      const signal = getSmartSignal(rsi, trend, price, prevPrice);
+      const score = scoreSignal(r, trend, momentum);
 
-      let existing = trades.find(t => t.symbol===symbol && t.status==="LIVE");
+      let existing = trades.find(t=>t.symbol===symbol && t.status==="LIVE");
 
-      if(!existing && signal==="BUY"){
+      /* ENTRY ONLY IF HIGH SCORE */
+      if(!existing && score >= 70){
+
         const order = await kc.placeOrder("regular",{
           exchange:"NSE",
           tradingsymbol:symbol,
@@ -133,10 +108,12 @@ async function runBot(){
           entry:price,
           sl:price*0.97,
           target:price*1.05,
+          score,
           status:"LIVE"
         });
       }
 
+      /* EXIT */
       for(let t of trades){
         if(t.symbol===symbol && t.status==="LIVE"){
 
@@ -150,9 +127,15 @@ async function runBot(){
               order_type:"MARKET"
             });
 
+            let pnl = (price - t.entry);
+            capital += pnl;
+
             t.status = "CLOSED";
+            t.exit = price;
+            t.pnl = pnl;
           }
 
+          /* TRAILING */
           if(price > t.entry*1.01){
             t.sl = price*0.997;
           }
@@ -167,18 +150,15 @@ async function runBot(){
 
 setInterval(runBot,10000);
 
-/* ================= ROUTES ================= */
-
+/* ROUTES */
 app.get("/performance",(req,res)=>{
   res.json({
     capital,
     trades,
-    mode:"V102_FINAL"
+    mode:"V103_PRO"
   });
 });
 
-app.get("/",(req,res)=>{
-  res.send("V102 FINAL RUNNING");
-});
+app.get("/",(req,res)=>res.send("V103 PRO RUNNING"));
 
-app.listen(PORT,()=>console.log("V102 FINAL RUNNING"));
+app.listen(PORT,()=>console.log("V103 PRO RUNNING"));
