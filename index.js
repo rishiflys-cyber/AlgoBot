@@ -1,3 +1,4 @@
+
 const express = require("express");
 const path = require("path");
 const { KiteConnect } = require("kiteconnect");
@@ -7,7 +8,7 @@ const PORT = process.env.PORT || 3000;
 
 const kc = new KiteConnect({ api_key: process.env.API_KEY });
 
-// LOGIN WITH IP
+// LOGIN
 app.get("/login",(req,res)=>res.redirect(kc.getLoginURL()));
 
 app.get("/redirect", async (req,res)=>{
@@ -16,7 +17,7 @@ app.get("/redirect", async (req,res)=>{
   res.send("ACCESS_TOKEN: "+session.access_token+"<br>IP: "+ip);
 });
 
-// PERFORMANCE FULL ENGINE
+// PERFORMANCE
 app.get("/performance", async (req,res)=>{
   try{
     kc.setAccessToken(process.env.ACCESS_TOKEN);
@@ -34,8 +35,7 @@ app.get("/performance", async (req,res)=>{
   }
 });
 
-// UI
 app.use(express.static(path.join(__dirname,"public")));
 app.get("/", (req,res)=>res.sendFile(path.join(__dirname,"public","index.html")));
 
-app.listen(PORT,()=>console.log("V85 PRO RUNNING"));
+app.listen(PORT,()=>console.log("V86 RUNNING"));

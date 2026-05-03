@@ -1,5 +1,5 @@
-const fs = require("fs");
-const ai = require("./strategies/smartAI");
+
+const rsi = require("./strategies/rsi");
 const options = require("./strategies/options");
 
 exports.run = async function(kc, capital){
@@ -9,7 +9,7 @@ exports.run = async function(kc, capital){
   const t = d.getHours()*60 + d.getMinutes();
 
   if(t < 555 || t > 925){
-    return {status:"MARKET_CLOSED", mode:"V85_PRO"};
+    return {status:"MARKET_CLOSED", mode:"V86_PRO"};
   }
 
   const positions = await kc.getPositions();
@@ -17,11 +17,11 @@ exports.run = async function(kc, capital){
   positions.net.forEach(p=> pnl+=p.pnl);
 
   if(pnl <= -capital*0.03){
-    return {status:"AUTO_SHUTDOWN", pnl, mode:"V85_PRO"};
+    return {status:"AUTO_SHUTDOWN", pnl, mode:"V86_PRO"};
   }
 
-  let signals=[
-    ...(await ai.generate(kc)),
+  const signals = [
+    ...(await rsi.generate(kc)),
     ...(await options.generate(kc))
   ];
 
@@ -29,7 +29,7 @@ exports.run = async function(kc, capital){
 
   for(let s of signals){
 
-    if(positions.net.length>0) continue;
+    if(positions.net.length > 0) continue;
 
     try{
       let order = await kc.placeOrder("regular",{
@@ -41,12 +41,17 @@ exports.run = async function(kc, capital){
         order_type:"MARKET"
       });
 
-      results.push({symbol:s.symbol, type:s.type, status:"PLACED", order_id:order.order_id});
+      results.push({
+        symbol:s.symbol,
+        sl:s.sl,
+        target:s.target,
+        status:"PLACED"
+      });
 
     }catch(e){
       results.push({symbol:s.symbol,status:"FAILED",reason:e.message});
     }
   }
 
-  return {status:"RUNNING", pnl, trades:results, mode:"V85_PRO"};
+  return {status:"RUNNING", pnl, trades:results, mode:"V86_PRO"};
 };
