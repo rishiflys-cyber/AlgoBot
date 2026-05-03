@@ -1,2 +1,0 @@
-AlgoBot Live Trading System
-
