@@ -7,11 +7,27 @@ const PORT = process.env.PORT || 3000;
 
 const kc = new KiteConnect({ api_key: process.env.API_KEY });
 
-/* LOGIN */
+/* LOGIN WITH IP FIX */
 app.get("/login",(req,res)=>res.redirect(kc.getLoginURL()));
+
 app.get("/redirect", async (req,res)=>{
-  const session = await kc.generateSession(req.query.request_token, process.env.API_SECRET);
-  res.send("ACCESS_TOKEN: " + session.access_token);
+  try{
+    const session = await kc.generateSession(
+      req.query.request_token,
+      process.env.API_SECRET
+    );
+
+    const ip =
+      req.headers['x-forwarded-for'] ||
+      req.socket.remoteAddress ||
+      req.connection.remoteAddress ||
+      "IP_NOT_FOUND";
+
+    res.send("ACCESS_TOKEN: " + session.access_token + "<br>IP: " + ip);
+
+  }catch(e){
+    res.send("Error: " + e.message);
+  }
 });
 
 /* CONFIG */
@@ -19,8 +35,8 @@ const symbols = ["RELIANCE","INFY","TCS","HDFCBANK"];
 let trades = [];
 let capital = 8491.8;
 
-const RISK_PER_TRADE = 0.02;     // 2%
-const MAX_DAILY_LOSS = 0.05;     // 5%
+const RISK_PER_TRADE = 0.02;
+const MAX_DAILY_LOSS = 0.05;
 let dailyPnL = 0;
 
 /* INDICATORS */
@@ -48,14 +64,13 @@ function scoreSignal(rsiVal, trend, momentum){
   return score;
 }
 
-/* BOT */
+/* FUND MODE ENGINE */
 async function runBot(){
   try{
     kc.setAccessToken(process.env.ACCESS_TOKEN);
 
-    // 🔥 DAILY LOSS CONTROL
     if(dailyPnL <= -capital * MAX_DAILY_LOSS){
-      console.log("MAX DAILY LOSS HIT - STOP TRADING");
+      console.log("STOPPED: Max loss hit");
       return;
     }
 
@@ -71,7 +86,6 @@ async function runBot(){
     for(let symbol of symbols){
 
       const inst = instrumentMap[symbol];
-
       const now = new Date();
       const from = new Date(now.getTime() - 60*60*1000);
 
@@ -95,20 +109,23 @@ async function runBot(){
     }
 
     candidates.sort((a,b)=>b.score - a.score);
-    const best = candidates[0];
 
-    if(best && best.score >= 60){
+    // 🔥 TAKE TOP 2 TRADES (SCALING)
+    const topTrades = candidates.slice(0,2);
+
+    for(let best of topTrades){
+
+      if(best.score < 60) continue;
 
       let existing = trades.find(t => t.symbol===best.symbol && t.status==="LIVE");
 
       if(!existing){
 
-        // 🔥 POSITION SIZING
         let riskAmount = capital * RISK_PER_TRADE;
         let slDistance = best.price * 0.03;
         let qty = Math.max(1, Math.floor(riskAmount / slDistance));
 
-        const order = await kc.placeOrder("regular",{
+        await kc.placeOrder("regular",{
           exchange:"NSE",
           tradingsymbol:best.symbol,
           transaction_type:"BUY",
@@ -128,12 +145,26 @@ async function runBot(){
       }
     }
 
-    // EXIT
+    // EXIT + PARTIAL PROFIT
     for(let t of trades){
       if(t.status==="LIVE"){
 
         const q = await kc.getQuote([`NSE:${t.symbol}`]);
         const price = q[`NSE:${t.symbol}`].last_price;
+
+        // PARTIAL EXIT
+        if(price > t.entry*1.02 && !t.partial){
+          await kc.placeOrder("regular",{
+            exchange:"NSE",
+            tradingsymbol:t.symbol,
+            transaction_type:"SELL",
+            quantity:Math.floor(t.qty/2),
+            product:"MIS",
+            order_type:"MARKET"
+          });
+
+          t.partial = true;
+        }
 
         if(price <= t.sl || price >= t.target){
 
@@ -174,10 +205,8 @@ app.get("/performance",(req,res)=>{
     capital,
     dailyPnL,
     trades,
-    risk_per_trade: RISK_PER_TRADE,
-    max_daily_loss: MAX_DAILY_LOSS,
-    mode:"V105_CAPITAL_RISK"
+    mode:"V106_FUND"
   });
 });
 
-app.listen(PORT,()=>console.log("V105 RUNNING"));
+app.listen(PORT,()=>console.log("V106 FUND MODE RUNNING"));
