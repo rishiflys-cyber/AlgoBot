@@ -8,36 +8,28 @@ const PORT = process.env.PORT || 3000;
 const kc = new KiteConnect({ api_key: process.env.API_KEY });
 
 const symbols = ["RELIANCE","INFY","TCS","HDFCBANK"];
-
 let trades = [];
 let capital = 8491.8;
-let maxRiskPerTrade = 0.02; // 2%
 
-// LOGIN
-app.get("/login",(req,res)=>res.redirect(kc.getLoginURL()));
-
-// REDIRECT
-app.get("/redirect", async (req,res)=>{
-  const session = await kc.generateSession(req.query.request_token, process.env.API_SECRET);
-  const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-  res.send("ACCESS_TOKEN: " + session.access_token + "<br>IP: " + ip);
-});
-
-// SIMPLE RSI
-function rsi(prices){
+// RSI
+function calculateRSI(closes){
   let gains=0, losses=0;
-  for(let i=1;i<prices.length;i++){
-    let d=prices[i]-prices[i-1];
-    if(d>0) gains+=d; else losses-=d;
+  for(let i=1;i<closes.length;i++){
+    let diff = closes[i]-closes[i-1];
+    if(diff>0) gains+=diff;
+    else losses-=diff;
   }
-  let rs=gains/(losses||1);
-  return 100-(100/(1+rs));
+  let rs = gains/(losses||1);
+  return 100 - (100/(1+rs));
 }
 
 // EMA
-function ema(data,p){
-  let k=2/(p+1), e=data[0];
-  for(let i=1;i<data.length;i++) e=data[i]*k+e*(1-k);
+function ema(data, period){
+  let k = 2/(period+1);
+  let e = data[0];
+  for(let i=1;i<data.length;i++){
+    e = data[i]*k + e*(1-k);
+  }
   return e;
 }
 
@@ -48,27 +40,47 @@ async function runBot(){
 
     for(let symbol of symbols){
 
-      const q = await kc.getQuote([`NSE:${symbol}`]);
-      const price = q[`NSE:${symbol}`].last_price;
+      // FETCH REAL CANDLES
+      const instrumentMap = {
+        "RELIANCE": 738561,
+        "INFY": 408065,
+        "TCS": 2953217,
+        "HDFCBANK": 341249
+      };
+
+      const instrument = instrumentMap[symbol];
+
+      const now = new Date();
+      const from = new Date(now.getTime() - 60*60*1000);
+
+      const candles = await kc.getHistoricalData(
+        instrument,
+        from,
+        now,
+        "5minute"
+      );
+
+      if(!candles || candles.length < 20) continue;
+
+      const closes = candles.map(c=>c.close);
+
+      const rsi = calculateRSI(closes);
+      const ema20 = ema(closes,20);
+      const ema50 = ema(closes,50);
+
+      const trend = ema20 > ema50 ? "UP" : "DOWN";
+
+      const quote = await kc.getQuote([`NSE:${symbol}`]);
+      const price = quote[`NSE:${symbol}`].last_price;
 
       let existing = trades.find(t => t.symbol===symbol && t.status==="LIVE");
 
-      // MOCK DATA FOR INDICATORS (replace with real candles later)
-      let prices = [price*0.99, price*1.01, price*1.02, price];
-
-      let r = rsi(prices);
-      let e20 = ema(prices,20);
-      let e50 = ema(prices,50);
-
-      let trend = e20 > e50 ? "UP":"DOWN";
-
-      // POSITION SIZE
-      let riskAmount = capital * maxRiskPerTrade;
-      let qty = Math.max(1, Math.floor(riskAmount / (price*0.03)));
-
       // ENTRY
       if(!existing){
-        if(r < 35 && trend==="UP"){
+        if(rsi < 35 && trend==="UP"){
+
+          const qty = 1;
+
           const order = await kc.placeOrder("regular",{
             exchange:"NSE",
             tradingsymbol:symbol,
@@ -85,7 +97,9 @@ async function runBot(){
             target:price*1.05,
             qty,
             status:"LIVE",
-            order_id:order.order_id
+            order_id:order.order_id,
+            rsi,
+            trend
           });
         }
       }
@@ -113,7 +127,6 @@ async function runBot(){
             t.pnl = pnl;
           }
 
-          // TRAILING
           if(price > t.entry*1.02){
             t.sl = price*0.995;
           }
@@ -133,12 +146,8 @@ app.get("/performance",(req,res)=>{
   res.json({
     capital,
     trades,
-    risk_per_trade: maxRiskPerTrade,
-    symbols,
-    mode:"V100_INSTITUTION"
+    mode:"V101_REAL_DATA"
   });
 });
 
-app.get("/",(req,res)=>res.send("V100 INSTITUTION MODE RUNNING"));
-
-app.listen(PORT,()=>console.log("V100 INSTITUTION RUNNING"));
+app.listen(PORT,()=>console.log("V101 REAL DATA RUNNING"));
