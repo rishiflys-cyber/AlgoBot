@@ -2,37 +2,60 @@
 <!DOCTYPE html>
 <html>
 <head>
-<title>AlgoBot Terminal</title>
+<title>AlgoBot Pro Suite</title>
 <style>
 body{background:#0d1117;color:#fff;font-family:Arial}
-.box{background:#161b22;padding:15px;margin:10px;border-radius:8px}
+.card{background:#161b22;padding:15px;margin:10px;border-radius:8px}
+.green{color:#00ff9c}
+.red{color:#ff4d4d}
 </style>
 </head>
 <body>
 
-<h2>🚀 AlgoBot Live Terminal</h2>
+<h2>🚀 PRO TRADING SUITE</h2>
 
-<div class="box" id="capital"></div>
-<div class="box" id="live"></div>
-<div class="box" id="history"></div>
+<div class="card" id="capital"></div>
+<div class="card" id="live"></div>
+<div class="card" id="history"></div>
 
 <script>
 async function load(){
 
   let perf = await fetch('/performance').then(r=>r.json());
+
   document.getElementById('capital').innerHTML = 
-    "Capital: " + perf.capital;
+    "Capital: " + perf.capital.toFixed(2);
 
-  let live = await fetch('/api/live').then(r=>r.json());
-  document.getElementById('live').innerHTML = 
-    "<b>Live Trades:</b><br>" + JSON.stringify(live.trades,null,2);
+  let liveHTML = "<b>Live Trades</b><br>";
 
-  let hist = await fetch('/api/history').then(r=>r.json());
-  document.getElementById('history').innerHTML = 
-    "<b>Trade History:</b><br>" + JSON.stringify(hist.closedTrades,null,2);
+  perf.trades.forEach(t=>{
+    let pnl = t.pnl || 0;
+    let color = pnl >=0 ? "green":"red";
+
+    liveHTML += `
+      ${t.symbol} | Entry: ${t.entry}
+      | SL: ${t.sl} | Target: ${t.target}
+      | PnL: <span class="${color}">${pnl.toFixed(2)}</span><br>
+    `;
+  });
+
+  document.getElementById('live').innerHTML = liveHTML;
+
+  let histHTML = "<b>Closed Trades</b><br>";
+
+  perf.closedTrades.forEach(t=>{
+    let color = t.pnl >=0 ? "green":"red";
+
+    histHTML += `
+      ${t.symbol} | Exit: ${t.exit}
+      | PnL: <span class="${color}">${t.pnl.toFixed(2)}</span><br>
+    `;
+  });
+
+  document.getElementById('history').innerHTML = histHTML;
 }
 
-setInterval(load,3000);
+setInterval(load,2000);
 load();
 </script>
 
