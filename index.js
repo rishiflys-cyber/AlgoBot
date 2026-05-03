@@ -7,10 +7,11 @@ const PORT = process.env.PORT || 3000;
 
 const kc = new KiteConnect({ api_key: process.env.API_KEY });
 
-// MULTI STOCK LIST
-const symbols = ["RELIANCE","INFY","TCS"];
+const symbols = ["RELIANCE","INFY","TCS","HDFCBANK"];
 
 let trades = [];
+let capital = 8491.8;
+let maxRiskPerTrade = 0.02; // 2%
 
 // LOGIN
 app.get("/login",(req,res)=>res.redirect(kc.getLoginURL()));
@@ -22,10 +23,22 @@ app.get("/redirect", async (req,res)=>{
   res.send("ACCESS_TOKEN: " + session.access_token + "<br>IP: " + ip);
 });
 
-// AI SIGNAL (simple scoring)
-function getSignal(price){
-  if(price % 2 === 0) return "BUY";
-  return "SKIP";
+// SIMPLE RSI
+function rsi(prices){
+  let gains=0, losses=0;
+  for(let i=1;i<prices.length;i++){
+    let d=prices[i]-prices[i-1];
+    if(d>0) gains+=d; else losses-=d;
+  }
+  let rs=gains/(losses||1);
+  return 100-(100/(1+rs));
+}
+
+// EMA
+function ema(data,p){
+  let k=2/(p+1), e=data[0];
+  for(let i=1;i<data.length;i++) e=data[i]*k+e*(1-k);
+  return e;
 }
 
 // BOT LOOP
@@ -38,28 +51,43 @@ async function runBot(){
       const q = await kc.getQuote([`NSE:${symbol}`]);
       const price = q[`NSE:${symbol}`].last_price;
 
-      let existing = trades.find(t => t.symbol === symbol && t.status==="LIVE");
+      let existing = trades.find(t => t.symbol===symbol && t.status==="LIVE");
+
+      // MOCK DATA FOR INDICATORS (replace with real candles later)
+      let prices = [price*0.99, price*1.01, price*1.02, price];
+
+      let r = rsi(prices);
+      let e20 = ema(prices,20);
+      let e50 = ema(prices,50);
+
+      let trend = e20 > e50 ? "UP":"DOWN";
+
+      // POSITION SIZE
+      let riskAmount = capital * maxRiskPerTrade;
+      let qty = Math.max(1, Math.floor(riskAmount / (price*0.03)));
 
       // ENTRY
-      if(!existing && getSignal(price)==="BUY"){
+      if(!existing){
+        if(r < 35 && trend==="UP"){
+          const order = await kc.placeOrder("regular",{
+            exchange:"NSE",
+            tradingsymbol:symbol,
+            transaction_type:"BUY",
+            quantity:qty,
+            product:"MIS",
+            order_type:"MARKET"
+          });
 
-        const order = await kc.placeOrder("regular",{
-          exchange:"NSE",
-          tradingsymbol:symbol,
-          transaction_type:"BUY",
-          quantity:1,
-          product:"MIS",
-          order_type:"MARKET"
-        });
-
-        trades.push({
-          symbol,
-          entry:price,
-          sl:price*0.97,
-          target:price*1.05,
-          status:"LIVE",
-          order_id:order.order_id
-        });
+          trades.push({
+            symbol,
+            entry:price,
+            sl:price*0.97,
+            target:price*1.05,
+            qty,
+            status:"LIVE",
+            order_id:order.order_id
+          });
+        }
       }
 
       // EXIT + TRAILING
@@ -72,12 +100,17 @@ async function runBot(){
               exchange:"NSE",
               tradingsymbol:symbol,
               transaction_type:"SELL",
-              quantity:1,
+              quantity:t.qty,
               product:"MIS",
               order_type:"MARKET"
             });
 
+            let pnl = (price - t.entry) * t.qty;
+            capital += pnl;
+
             t.status = price <= t.sl ? "SL_HIT" : "TARGET_HIT";
+            t.exit = price;
+            t.pnl = pnl;
           }
 
           // TRAILING
@@ -93,19 +126,19 @@ async function runBot(){
   }
 }
 
-// LOOP
 setInterval(runBot,10000);
 
 // PERFORMANCE
 app.get("/performance",(req,res)=>{
   res.json({
-    capital:8491.8,
+    capital,
     trades,
+    risk_per_trade: maxRiskPerTrade,
     symbols,
-    mode:"V99_PRO"
+    mode:"V100_INSTITUTION"
   });
 });
 
-app.get("/",(req,res)=>res.send("V99 PRO RUNNING"));
+app.get("/",(req,res)=>res.send("V100 INSTITUTION MODE RUNNING"));
 
-app.listen(PORT,()=>console.log("V99 PRO RUNNING"));
+app.listen(PORT,()=>console.log("V100 INSTITUTION RUNNING"));
