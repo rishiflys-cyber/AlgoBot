@@ -5,6 +5,6 @@ const app = express();
 app.use("/", require("./routes/login"));
 app.use("/", require("./routes/performance"));
 
-app.get("/", (req,res)=> res.send("SMART DEBUG ENGINE"));
+app.get("/", (req,res)=> res.send("REAL EXECUTION ACTIVE"));
 
 module.exports = app;

@@ -1,6 +1,7 @@
 
 const { KiteConnect } = require("kiteconnect");
 const state = require("../core/state");
+
 const kc = new KiteConnect({ api_key: process.env.API_KEY });
 
 const symbols = {
@@ -9,43 +10,33 @@ const symbols = {
   TCS: "NSE:TCS"
 };
 
-function decision(m){
-  let reasons = [];
-  let score=0;
-
-  if(m.trend==="UP"){
-    score+=30;
-  } else {
-    reasons.push("Trend not UP");
-  }
-
-  if(m.rsi<50){
-    score+=30;
-  } else {
-    reasons.push("RSI too high");
-  }
-
-  if(m.momentum>0){
-    score+=20;
-  } else {
-    reasons.push("No momentum");
-  }
-
-  let buy = score>=50;
-
-  if(!buy && reasons.length===0){
-    reasons.push("Score below threshold");
-  }
-
-  return {buy,score,reasons};
-}
-
 async function updateCapital(){
   try{
     kc.setAccessToken(process.env.ACCESS_TOKEN);
     const margins = await kc.getMargins();
     state.capital = margins.equity.available.cash || 0;
-  }catch(e){}
+  }catch(e){
+    console.log("CAPITAL ERROR", e.message);
+  }
+}
+
+async function placeOrder(symbol, qty){
+  try{
+    kc.setAccessToken(process.env.ACCESS_TOKEN);
+
+    const order = await kc.placeOrder("regular", {
+      exchange: "NSE",
+      tradingsymbol: symbol,
+      transaction_type: "BUY",
+      quantity: qty,
+      product: "MIS",
+      order_type: "MARKET"
+    });
+
+    return order;
+  }catch(e){
+    console.log("ORDER ERROR", e.message);
+  }
 }
 
 setInterval(async ()=>{
@@ -60,36 +51,31 @@ setInterval(async ()=>{
       let quote = await kc.getQuote([symbols[sym]]);
       let price = quote[symbols[sym]].last_price;
 
-      let rsi = 60; // simple stable placeholder
-      let trend = "UP";
-      let momentum = 1;
-
-      let m = {price,rsi,trend,momentum};
-
-      let ai = decision(m);
+      let decision = true; // simplified trigger
 
       state.debug[sym] = {
         price,
-        rsi,
-        trend,
-        momentum,
-        score: ai.score,
-        action: ai.buy ? "BUY":"HOLD",
-        reason: ai.buy ? "All conditions met" : ai.reasons.join(", ")
+        decision
       };
 
-      if(ai.buy && !state.trades.find(t=>t.symbol===sym)){
+      if(decision && !state.trades.find(t=>t.symbol===sym)){
+
+        let qty = Math.max(Math.floor(state.capital / price * 0.1),1);
+
+        let order = await placeOrder(sym, qty);
+
         state.trades.push({
           symbol:sym,
           entry:price,
-          status:"LIVE",
-          score:ai.score
+          qty,
+          order_id: order?.order_id || "FAILED",
+          status:"LIVE"
         });
       }
     }
 
   }catch(e){
-    console.log("ERR",e.message);
+    console.log("ENGINE ERROR", e.message);
   }
 
-},10000);
+},15000);
