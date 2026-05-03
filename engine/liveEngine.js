@@ -1,6 +1,5 @@
-
+const fs = require("fs");
 const rsi = require("./strategies/rsi");
-const options = require("./strategies/options");
 
 exports.run = async function(kc, capital){
 
@@ -9,31 +8,47 @@ exports.run = async function(kc, capital){
   const t = d.getHours()*60 + d.getMinutes();
 
   if(t < 555 || t > 925){
-    return {status:"MARKET_CLOSED", mode:"V86_PRO"};
+    return {status:"MARKET_CLOSED", mode:"V87_ENGINE"};
   }
 
   const positions = await kc.getPositions();
   let pnl=0;
   positions.net.forEach(p=> pnl+=p.pnl);
 
-  if(pnl <= -capital*0.03){
-    return {status:"AUTO_SHUTDOWN", pnl, mode:"V86_PRO"};
+  let tradesLog=[];
+  try{ tradesLog=JSON.parse(fs.readFileSync("./data/trades.json")); }catch{}
+
+  // EXIT ENGINE
+  for(let trade of tradesLog){
+    if(trade.status==="LIVE"){
+      let quote = await kc.getQuote([`NSE:${trade.symbol}`]);
+      let price = quote[`NSE:${trade.symbol}`].last_price;
+
+      if(price <= trade.sl){
+        trade.status="SL_HIT";
+      } else if(price >= trade.target){
+        trade.status="TARGET_HIT";
+      } else if(price > trade.entry*1.01){
+        trade.sl = price*0.99;
+        trade.status="TRAILING";
+      }
+    }
   }
 
-  const signals = [
-    ...(await rsi.generate(kc)),
-    ...(await options.generate(kc))
-  ];
+  fs.writeFileSync("./data/trades.json", JSON.stringify(tradesLog,null,2));
+
+  // ENTRY
+  const signals = await rsi.generate(kc);
 
   let results=[];
 
   for(let s of signals){
 
-    if(positions.net.length > 0) continue;
+    if(positions.net.length>0) continue;
 
     try{
       let order = await kc.placeOrder("regular",{
-        exchange:s.exchange,
+        exchange:"NSE",
         tradingsymbol:s.symbol,
         transaction_type:"BUY",
         quantity:1,
@@ -41,17 +56,23 @@ exports.run = async function(kc, capital){
         order_type:"MARKET"
       });
 
-      results.push({
+      let trade={
         symbol:s.symbol,
+        entry:s.price,
         sl:s.sl,
         target:s.target,
-        status:"PLACED"
-      });
+        status:"LIVE"
+      };
+
+      tradesLog.push(trade);
+      fs.writeFileSync("./data/trades.json", JSON.stringify(tradesLog,null,2));
+
+      results.push(trade);
 
     }catch(e){
       results.push({symbol:s.symbol,status:"FAILED",reason:e.message});
     }
   }
 
-  return {status:"RUNNING", pnl, trades:results, mode:"V86_PRO"};
+  return {status:"RUNNING", pnl, trades:tradesLog, mode:"V87_ENGINE"};
 };

@@ -1,4 +1,3 @@
-
 const express = require("express");
 const path = require("path");
 const { KiteConnect } = require("kiteconnect");
@@ -38,4 +37,4 @@ app.get("/performance", async (req,res)=>{
 app.use(express.static(path.join(__dirname,"public")));
 app.get("/", (req,res)=>res.sendFile(path.join(__dirname,"public","index.html")));
 
-app.listen(PORT,()=>console.log("V86 RUNNING"));
+app.listen(PORT,()=>console.log("V87 RUNNING"));
