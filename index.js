@@ -7,6 +7,38 @@ const PORT = process.env.PORT || 3000;
 
 const kc = new KiteConnect({ api_key: process.env.API_KEY });
 
+/* ================= LOGIN ================= */
+
+app.get("/login",(req,res)=>{
+  try{
+    const url = kc.getLoginURL();
+    res.redirect(url);
+  }catch(e){
+    res.send("Login Error: " + e.message);
+  }
+});
+
+app.get("/redirect", async (req,res)=>{
+  try{
+    const session = await kc.generateSession(
+      req.query.request_token,
+      process.env.API_SECRET
+    );
+
+    const ip =
+      req.headers['x-forwarded-for'] ||
+      req.socket.remoteAddress ||
+      "IP_NOT_FOUND";
+
+    res.send("ACCESS_TOKEN: " + session.access_token + "<br>IP: " + ip);
+
+  }catch(e){
+    res.send("Redirect Error: " + e.message);
+  }
+});
+
+/* ================= SMART BOT ================= */
+
 const symbols = ["RELIANCE","INFY","TCS","HDFCBANK"];
 let trades = [];
 let capital = 8491.8;
@@ -87,13 +119,11 @@ async function runBot(){
       let existing = trades.find(t => t.symbol===symbol && t.status==="LIVE");
 
       if(!existing && signal==="BUY"){
-        const qty = 1;
-
         const order = await kc.placeOrder("regular",{
           exchange:"NSE",
           tradingsymbol:symbol,
           transaction_type:"BUY",
-          quantity:qty,
+          quantity:1,
           product:"MIS",
           order_type:"MARKET"
         });
@@ -103,11 +133,7 @@ async function runBot(){
           entry:price,
           sl:price*0.97,
           target:price*1.05,
-          qty,
-          status:"LIVE",
-          rsi,
-          trend,
-          signal
+          status:"LIVE"
         });
       }
 
@@ -119,17 +145,12 @@ async function runBot(){
               exchange:"NSE",
               tradingsymbol:symbol,
               transaction_type:"SELL",
-              quantity:t.qty,
+              quantity:1,
               product:"MIS",
               order_type:"MARKET"
             });
 
-            let pnl = (price - t.entry) * t.qty;
-            capital += pnl;
-
-            t.status = price <= t.sl ? "SL_HIT" : "TARGET_HIT";
-            t.exit = price;
-            t.pnl = pnl;
+            t.status = "CLOSED";
           }
 
           if(price > t.entry*1.01){
@@ -146,12 +167,18 @@ async function runBot(){
 
 setInterval(runBot,10000);
 
+/* ================= ROUTES ================= */
+
 app.get("/performance",(req,res)=>{
   res.json({
     capital,
     trades,
-    mode:"V102_SMART_SIGNAL"
+    mode:"V102_FINAL"
   });
 });
 
-app.listen(PORT,()=>console.log("V102 SMART SIGNAL RUNNING"));
+app.get("/",(req,res)=>{
+  res.send("V102 FINAL RUNNING");
+});
+
+app.listen(PORT,()=>console.log("V102 FINAL RUNNING"));
