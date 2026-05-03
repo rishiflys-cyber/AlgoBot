@@ -1,6 +1,7 @@
 
 const express = require("express");
 const router = express.Router();
+const fs = require("fs");
 const { KiteConnect } = require("kiteconnect");
 
 const kc = new KiteConnect({ api_key: process.env.API_KEY });
@@ -14,11 +15,14 @@ router.get("/redirect", async (req,res)=>{
             process.env.API_SECRET
         );
 
-        process.env.ACCESS_TOKEN = session.access_token;
+        const token = session.access_token;
+
+        // SAVE TOKEN (CRITICAL FIX)
+        fs.writeFileSync("access_token.txt", token);
 
         const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
 
-        res.send("ACCESS_TOKEN: "+session.access_token+"<br>IP: "+ip);
+        res.send("ACCESS_TOKEN: "+token+"<br>IP: "+ip);
 
     }catch(e){
         res.send(e.message);
