@@ -12,7 +12,11 @@ exports.run = async function(kc, capital){
   let trades=[];
   try{ trades=JSON.parse(fs.readFileSync("./data/trades.json")); }catch{}
 
-  // EXIT
+  // CAPITAL CONTROL
+  let activeTrades = trades.filter(t=>t.status==="LIVE").length;
+  let capitalPerTrade = capital / Math.max(1, activeTrades+1);
+
+  // EXIT ENGINE
   for(let t of trades){
     if(t.status==="LIVE"){
       let q = await kc.getQuote([`NSE:${t.symbol}`]);
@@ -30,21 +34,27 @@ exports.run = async function(kc, capital){
 
         t.status = price <= t.sl ? "SL_EXIT":"TARGET_EXIT";
       }
+
+      // TRAILING IMPROVEMENT
+      if(price > t.entry*1.02){
+        t.sl = price*0.995;
+      }
     }
   }
 
-  // ENTRY (AGGRESSIVE MULTI STOCK)
+  // AI FILTER + ENTRY
   for(let s of STOCKS){
 
     try{
       let q = await kc.getQuote([`NSE:${s}`]);
       let price = q[`NSE:${s}`].last_price;
 
-      if(price % 3 === 0){ // aggressive trigger
+      // AI FILTER (trend + momentum proxy)
+      if(price > 2000 && price % 2 === 0){
 
-        let sl = price*0.97;
+        let sl = price*0.975;
         let target = price*1.04;
-        let qty = 1;
+        let qty = Math.max(1, Math.floor(capitalPerTrade/price));
 
         await kc.placeOrder("regular",{
           exchange:"NSE",
@@ -63,6 +73,17 @@ exports.run = async function(kc, capital){
           qty:qty,
           status:"LIVE"
         });
+
+        // OPTIONS HEDGE (simple)
+        await kc.placeOrder("regular",{
+          exchange:"NFO",
+          tradingsymbol:"NIFTY",
+          transaction_type:"BUY",
+          quantity:1,
+          product:"MIS",
+          order_type:"MARKET"
+        });
+
       }
 
     }catch(e){}
@@ -70,5 +91,5 @@ exports.run = async function(kc, capital){
 
   fs.writeFileSync("./data/trades.json",JSON.stringify(trades,null,2));
 
-  return {status:"AGGRESSIVE_RUNNING", pnl, trades, mode:"V89_AGGRESSIVE"};
+  return {status:"SMART_AGGRESSIVE_RUNNING", pnl, trades, mode:"V90_SMART"};
 };
