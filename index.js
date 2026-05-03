@@ -11,33 +11,6 @@ const symbols = ["RELIANCE","INFY","TCS","HDFCBANK"];
 let trades = [];
 let capital = 8491.8;
 
-/* ================= LOGIN ================= */
-
-app.get("/login",(req,res)=>{
-  res.redirect(kc.getLoginURL());
-});
-
-app.get("/redirect", async (req,res)=>{
-  try{
-    const session = await kc.generateSession(
-      req.query.request_token,
-      process.env.API_SECRET
-    );
-
-    const ip =
-      req.headers['x-forwarded-for'] ||
-      req.socket.remoteAddress ||
-      "IP_NOT_FOUND";
-
-    res.send("ACCESS_TOKEN: " + session.access_token + "<br>IP: " + ip);
-
-  }catch(e){
-    res.send(e.message);
-  }
-});
-
-/* ================= INDICATORS ================= */
-
 function calculateRSI(closes){
   let gains=0, losses=0;
   for(let i=1;i<closes.length;i++){
@@ -58,7 +31,19 @@ function ema(data, period){
   return e;
 }
 
-/* ================= BOT ================= */
+function getSmartSignal(rsi, trend, price, prevPrice){
+  let momentum = price - prevPrice;
+
+  if(rsi < 45 && trend === "UP" && momentum > 0){
+    return "BUY";
+  }
+
+  if(rsi > 55 && trend === "DOWN" && momentum < 0){
+    return "SELL";
+  }
+
+  return "SKIP";
+}
 
 async function runBot(){
   try{
@@ -94,46 +79,42 @@ async function runBot(){
       const ema50 = ema(closes,50);
       const trend = ema20 > ema50 ? "UP" : "DOWN";
 
-      const quote = await kc.getQuote([`NSE:${symbol}`]);
-      const price = quote[`NSE:${symbol}`].last_price;
+      const price = closes[closes.length-1];
+      const prevPrice = closes[closes.length-2];
+
+      const signal = getSmartSignal(rsi, trend, price, prevPrice);
 
       let existing = trades.find(t => t.symbol===symbol && t.status==="LIVE");
 
-      // ENTRY
-      if(!existing){
-        if(rsi < 35 && trend==="UP"){
+      if(!existing && signal==="BUY"){
+        const qty = 1;
 
-          const qty = 1;
+        const order = await kc.placeOrder("regular",{
+          exchange:"NSE",
+          tradingsymbol:symbol,
+          transaction_type:"BUY",
+          quantity:qty,
+          product:"MIS",
+          order_type:"MARKET"
+        });
 
-          const order = await kc.placeOrder("regular",{
-            exchange:"NSE",
-            tradingsymbol:symbol,
-            transaction_type:"BUY",
-            quantity:qty,
-            product:"MIS",
-            order_type:"MARKET"
-          });
-
-          trades.push({
-            symbol,
-            entry:price,
-            sl:price*0.97,
-            target:price*1.05,
-            qty,
-            status:"LIVE",
-            order_id:order.order_id,
-            rsi,
-            trend
-          });
-        }
+        trades.push({
+          symbol,
+          entry:price,
+          sl:price*0.97,
+          target:price*1.05,
+          qty,
+          status:"LIVE",
+          rsi,
+          trend,
+          signal
+        });
       }
 
-      // EXIT + TRAILING
       for(let t of trades){
         if(t.symbol===symbol && t.status==="LIVE"){
 
           if(price <= t.sl || price >= t.target){
-
             await kc.placeOrder("regular",{
               exchange:"NSE",
               tradingsymbol:symbol,
@@ -151,8 +132,8 @@ async function runBot(){
             t.pnl = pnl;
           }
 
-          if(price > t.entry*1.02){
-            t.sl = price*0.995;
+          if(price > t.entry*1.01){
+            t.sl = price*0.997;
           }
         }
       }
@@ -165,18 +146,12 @@ async function runBot(){
 
 setInterval(runBot,10000);
 
-/* ================= ROUTES ================= */
-
 app.get("/performance",(req,res)=>{
   res.json({
     capital,
     trades,
-    mode:"V101_FINAL"
+    mode:"V102_SMART_SIGNAL"
   });
 });
 
-app.get("/",(req,res)=>{
-  res.send("V101 FINAL RUNNING");
-});
-
-app.listen(PORT,()=>console.log("V101 FINAL RUNNING"));
+app.listen(PORT,()=>console.log("V102 SMART SIGNAL RUNNING"));
