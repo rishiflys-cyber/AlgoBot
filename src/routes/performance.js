@@ -9,7 +9,8 @@ router.get("/performance",(req,res)=>{
         trades: state.trades,
         closedTrades: state.closedTrades,
         debug: state.debug,
-        mode: "FINAL_DEBUG"
+        ip: state.ip,
+        mode: "SMART_DEBUG"
     });
 });
 
