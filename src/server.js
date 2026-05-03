@@ -2,6 +2,6 @@
 const app = require("./app");
 const PORT = process.env.PORT || 3000;
 
-require("./engine/engine"); // start engine
+require("./engine/engine");
 
-app.listen(PORT, () => console.log("RUNNING FINAL ENGINE on", PORT));
+app.listen(PORT, () => console.log("RUNNING DEBUG ENGINE on", PORT));

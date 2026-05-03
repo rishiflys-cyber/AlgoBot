@@ -8,7 +8,8 @@ router.get("/performance",(req,res)=>{
         capital: state.capital,
         trades: state.trades,
         closedTrades: state.closedTrades,
-        mode: "FINAL_FULL_ENGINE"
+        debug: state.debug,
+        mode: "FINAL_DEBUG"
     });
 });
 

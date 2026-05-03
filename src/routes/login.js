@@ -5,9 +5,7 @@ const { KiteConnect } = require("kiteconnect");
 
 const kc = new KiteConnect({ api_key: process.env.API_KEY });
 
-router.get("/login",(req,res)=>{
-    res.redirect(kc.getLoginURL());
-});
+router.get("/login",(req,res)=> res.redirect(kc.getLoginURL()));
 
 router.get("/redirect", async (req,res)=>{
     try{
@@ -16,11 +14,9 @@ router.get("/redirect", async (req,res)=>{
             process.env.API_SECRET
         );
 
-        const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-
         process.env.ACCESS_TOKEN = session.access_token;
 
-        res.send("ACCESS_TOKEN: "+session.access_token+"<br>IP: "+ip);
+        res.send("ACCESS_TOKEN: "+session.access_token);
 
     }catch(e){
         res.send(e.message);

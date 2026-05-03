@@ -1,6 +1,7 @@
 
 module.exports = {
-    capital: 8560,
+    capital: 0,
     trades: [],
-    closedTrades: []
+    closedTrades: [],
+    debug: {}
 };
