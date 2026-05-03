@@ -12,11 +12,7 @@ const kc = new KiteConnect({ api_key: process.env.API_KEY });
 app.get("/login",(req,res)=>res.redirect(kc.getLoginURL()));
 
 app.get("/redirect", async (req,res)=>{
-  const session = await kc.generateSession(
-    req.query.request_token,
-    process.env.API_SECRET
-  );
-
+  const session = await kc.generateSession(req.query.request_token, process.env.API_SECRET);
   const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
   res.send("ACCESS_TOKEN: "+session.access_token+"<br>IP: "+ip);
 });
@@ -26,19 +22,49 @@ let capital = 8560;
 let trades = [];
 let closedTrades = [];
 
-/* REAL DATA FUNCTION */
-async function getMarketData(){
+/* EMA */
+function ema(data, period){
+  let k = 2/(period+1);
+  let emaVal = data[0];
+  for(let i=1;i<data.length;i++){
+    emaVal = data[i]*k + emaVal*(1-k);
+  }
+  return emaVal;
+}
+
+/* RSI */
+function rsi(closes){
+  let gains=0, losses=0;
+  for(let i=1;i<closes.length;i++){
+    let diff = closes[i]-closes[i-1];
+    if(diff>0) gains+=diff;
+    else losses-=diff;
+  }
+  let rs = gains/(losses || 1);
+  return 100 - (100/(1+rs));
+}
+
+/* REAL MARKET DATA */
+async function getMarket(){
   kc.setAccessToken(process.env.ACCESS_TOKEN);
 
-  const quote = await kc.getQuote(["NSE:INFY"]);
-  const price = quote["NSE:INFY"].last_price;
+  const inst = 408065; // INFY
+  const now = new Date();
+  const from = new Date(now.getTime() - 60*60*1000);
 
-  return {
-    price,
-    rsi: Math.random()*100, // replace later with real RSI calc
-    trend: Math.random()>0.5?"UP":"DOWN",
-    momentum: Math.random()*2-1
-  };
+  const candles = await kc.getHistoricalData(inst, from, now, "5minute");
+
+  const closes = candles.map(c=>c.close);
+  const price = closes[closes.length-1];
+
+  const r = rsi(closes);
+  const e20 = ema(closes,20);
+  const e50 = ema(closes,50);
+
+  const trend = e20 > e50 ? "UP":"DOWN";
+  const momentum = price - closes[closes.length-2];
+
+  return { price, rsi:r, trend, momentum };
 }
 
 /* AI */
@@ -54,7 +80,7 @@ function aiDecision(m){
 /* LOOP */
 setInterval(async ()=>{
   try{
-    let m = await getMarketData();
+    let m = await getMarket();
     let ai = aiDecision(m);
 
     if(!trades.length && ai.action==="BUY"){
@@ -64,9 +90,12 @@ setInterval(async ()=>{
         sl:m.price*0.97,
         target:m.price*1.05,
         status:"LIVE",
-        confidence:ai.confidence
+        confidence:ai.confidence,
+        rsi:m.rsi,
+        trend:m.trend
       });
-    } else if(trades.length){
+    } 
+    else if(trades.length){
       let t = trades[0];
       let price = m.price;
       let pnl = price - t.entry;
@@ -84,14 +113,14 @@ setInterval(async ()=>{
       }
     }
   }catch(e){
-    console.log(e.message);
+    console.log("ERR:", e.message);
   }
 
-},5000);
+},8000);
 
 /* ROUTE */
 app.get("/performance",(req,res)=>{
-  res.json({capital,trades,closedTrades,mode:"V113_REAL_DATA"});
+  res.json({capital,trades,closedTrades,mode:"V114_REAL_INDICATORS"});
 });
 
-app.listen(PORT,()=>console.log("V113 RUNNING"));
+app.listen(PORT,()=>console.log("V114 RUNNING"));
